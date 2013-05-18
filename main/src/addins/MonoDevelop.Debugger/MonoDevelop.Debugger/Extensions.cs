@@ -47,17 +47,10 @@ namespace MonoDevelop.Debugger
 			if (opers.CurrentRunOperation != null && !opers.CurrentRunOperation.IsCompleted)
 				return opers.CurrentRunOperation;
 
-			string oldLayout = IdeApp.Workbench.CurrentLayout;
-			IdeApp.Workbench.CurrentLayout = "Debug";
-
 			ExecutionContext context = new ExecutionContext (DebuggingService.GetExecutionHandler (), IdeApp.Workbench.ProgressMonitors, IdeApp.Workspace.ActiveExecutionTarget);
 
 			IAsyncOperation op = opers.Execute (entry, context);
-			op.Completed += delegate {
-				Gtk.Application.Invoke (delegate {
-					IdeApp.Workbench.CurrentLayout = oldLayout;
-				});
-			};
+			SwitchToDebugLayout (op);
 			return op;
 		}
 		
@@ -100,8 +93,10 @@ namespace MonoDevelop.Debugger
 			if (opers.CurrentRunOperation != null && !opers.CurrentRunOperation.IsCompleted)
 				return opers.CurrentRunOperation;
 			
-			opers.CurrentRunOperation = DebuggingService.AttachToProcess (debugger, proc);
-			
+			IAsyncOperation oper = DebuggingService.AttachToProcess (debugger, proc);
+			SwitchToDebugLayout (oper);
+
+			opers.CurrentRunOperation = oper;
 			return opers.CurrentRunOperation;
 		}
 
@@ -113,6 +108,18 @@ namespace MonoDevelop.Debugger
 		public static bool CanDebug (this Document doc)
 		{
 			return doc.FileName != FilePath.Null && IdeApp.ProjectOperations.CanDebugFile (doc.FileName);
+		}
+
+		static void SwitchToDebugLayout (IAsyncOperation oper)
+		{
+			string oldLayout = IdeApp.Workbench.CurrentLayout;
+			IdeApp.Workbench.CurrentLayout = "Debug";
+
+			oper.Completed += delegate {
+				DispatchService.GuiDispatch (delegate {
+					IdeApp.Workbench.CurrentLayout = oldLayout;
+				});
+			};
 		}
 	}
 }

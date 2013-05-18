@@ -75,9 +75,13 @@
 				_label = "Debug Application..." />
 		<Command id = "MonoDevelop.Debugger.DebugCommands.AttachToProcess"
 				defaultHandler = "MonoDevelop.Debugger.AttachToProcessHandler"
+				icon = "gtk-connect"
+				_description = "Attach to Process"
 				_label = "Attach to Process..." />
 		<Command id = "MonoDevelop.Debugger.DebugCommands.Detach"
 				defaultHandler = "MonoDevelop.Debugger.DetachFromProcessHandler"
+				icon = "gtk-disconnect"
+				_description = "Detach Debugger"
 				_label = "Detach" />
 		<Command id = "MonoDevelop.Debugger.DebugCommands.Pause"
 				defaultHandler = "MonoDevelop.Debugger.PauseDebugHandler"
@@ -234,7 +238,8 @@
 	<Extension path = "/MonoDevelop/Ide/CommandBar">
 		<ItemSet id = "Debug">
 			<CommandItem id = "MonoDevelop.Debugger.DebugCommands.Continue" />
-			<CommandItem id = "MonoDevelop.Debugger.DebugCommands.Pause" />						
+			<CommandItem id = "MonoDevelop.Debugger.DebugCommands.Pause" />
+			<CommandItem id = "MonoDevelop.Debugger.DebugCommands.Detach" />					
 			<CommandItem id = "MonoDevelop.Debugger.DebugCommands.StepOver" />
 			<CommandItem id = "MonoDevelop.Debugger.DebugCommands.StepInto" />
 			<CommandItem id = "MonoDevelop.Debugger.DebugCommands.StepOut" />	

@@ -577,7 +577,8 @@ namespace Mono.Debugging.Soft
 
 		protected override void OnAttachToProcess (long processId)
 		{
-			throw new NotSupportedException ();
+			long port = 56000 + (processId % 1000);
+			ConnectionStarted (VirtualMachineManager.Connect (new IPEndPoint (IPAddress.Loopback, (int)port)));
 		}
 
 		protected override void OnContinue ()
@@ -597,7 +598,9 @@ namespace Mono.Debugging.Soft
 
 		protected override void OnDetach ()
 		{
-			throw new NotSupportedException ();
+			EndLaunch ();
+			vm.Disconnect ();
+			vm.Dispose ();
 		}
 
 		protected override void OnExit ()
@@ -1299,7 +1302,11 @@ namespace Mono.Debugging.Soft
 				if (es.Events.Length != 1)
 					throw new InvalidOperationException ("EventSet has unexpected combination of events");
 				HandleEvent (es[0]);
-				vm.Resume ();
+				try {
+					vm.Resume ();
+				} catch (InvalidOperationException) {
+					// The VM is not suspended!
+				}
 			}
 		}
 		
