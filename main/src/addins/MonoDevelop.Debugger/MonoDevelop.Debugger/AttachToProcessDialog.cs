@@ -42,18 +42,18 @@ namespace MonoDevelop.Debugger
 		Gtk.ListStore store;
 		TreeViewState state;
 		uint timeoutHandler;
-		
+
 		public AttachToProcessDialog()
 		{
 			this.Build();
-			
+
 			store = new Gtk.ListStore (typeof(ProcessInfo), typeof(string), typeof(string));
 			tree.Model = store;
 			tree.AppendColumn ("PID", new Gtk.CellRendererText (), "text", 1);
 			tree.AppendColumn ("Process Name", new Gtk.CellRendererText (), "text", 2);
-			
+
 			state = new TreeViewState (tree, 1);
-      
+
 			Refresh ();
 
 			comboDebs.Sensitive = false;
@@ -63,7 +63,7 @@ namespace MonoDevelop.Debugger
 
 			Gtk.TreeIter it;
 			if (store.GetIterFirst (out it))
-			tree.Selection.SelectIter (it);
+				tree.Selection.SelectIter (it);
 
 			timeoutHandler = GLib.Timeout.Add (3000, Refresh);
 		}
@@ -79,7 +79,7 @@ namespace MonoDevelop.Debugger
 		{
 			procEngines = new Dictionary<long,List<DebuggerEngine>> ();
 			procs = new List<ProcessInfo> ();
-									
+
 			foreach (DebuggerEngine de in DebuggingService.GetDebuggerEngines ()) {
 				if ((de.SupportedFeatures & DebuggerFeatures.Attaching) == 0)
 					continue;
@@ -99,35 +99,35 @@ namespace MonoDevelop.Debugger
 				}
 				comboDebs.AppendText (de.Name);
 			}
-			
+
 			FillList ();
 			return true;
 		}
-		
+
 		void FillList ()
 		{
 			state.Save ();
-			
+
 			store.Clear ();
 			string filter = entryFilter.Text;
 			foreach (ProcessInfo pi in procs) {
 				if (filter.Length == 0 || pi.Id.ToString().Contains (filter) || pi.Name.Contains (filter))
 					store.AppendValues (pi, pi.Id.ToString (), pi.Name);
 			}
-			
+
 			state.Load ();
-			
+
 			if (tree.Selection.CountSelectedRows () == 0) {
 				Gtk.TreeIter it;
 				if (store.GetIterFirst (out it))
 					tree.Selection.SelectIter (it);
 			}
 		}
-		
+
 		void OnSelectionChanged (object s, EventArgs args)
 		{
 			((Gtk.ListStore)comboDebs.Model).Clear ();
-			
+
 			Gtk.TreeIter iter;
 			if (tree.Selection.GetSelected (out iter)) {
 				ProcessInfo pi = (ProcessInfo) store.GetValue (iter, 0);
@@ -154,7 +154,7 @@ namespace MonoDevelop.Debugger
 		{
 			Respond (Gtk.ResponseType.Ok);
 		}
-		
+
 		public ProcessInfo SelectedProcess {
 			get {
 				Gtk.TreeIter iter;
@@ -162,7 +162,7 @@ namespace MonoDevelop.Debugger
 				return (ProcessInfo) store.GetValue (iter, 0);
 			}
 		}
-		
+
 		public DebuggerEngine SelectedDebugger {
 			get {
 				return currentDebEngines [comboDebs.Active];
