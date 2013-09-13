@@ -43,7 +43,7 @@ namespace Mono.TextEditor
 	public class TextEditorData : IDisposable
 	{
 		ITextEditorOptions    options;
-		readonly TextDocument document; 
+		TextDocument document; 
 		readonly Caret        caret;
 		
 		static Adjustment emptyAdjustment = new Adjustment (0, 0, 0, 0, 0, 0);
@@ -89,13 +89,13 @@ namespace Mono.TextEditor
 		
 		public string FileName {
 			get {
-				return Document.FileName;
+				return Document != null ? Document.FileName : null;
 			}
 		}
 		
 		public string MimeType {
 			get {
-				return Document.MimeType;
+				return Document != null ? Document.MimeType : null;
 			}
 		}
 
@@ -487,6 +487,8 @@ namespace Mono.TextEditor
 
 		void DetachDocument ()
 		{
+			if (document == null)
+				return;
 			document.BeginUndo -= OnBeginUndo;
 			document.EndUndo -= OnEndUndo;
 
@@ -498,6 +500,7 @@ namespace Mono.TextEditor
 			document.TextSet -= HandleDocTextSet;
 			document.Folded -= HandleTextEditorDataDocumentFolded;
 			document.FoldTreeUpdated -= HandleFoldTreeUpdated;
+			document = null;
 		}
 
 		public void Dispose ()
@@ -509,6 +512,8 @@ namespace Mono.TextEditor
 			options = options.Kill ();
 			HeightTree.Dispose ();
 			DetachDocument ();
+			ClearTooltipProviders ();
+			tooltipProviders = null;
 		}
 
 		/// <summary>
@@ -1001,6 +1006,9 @@ namespace Mono.TextEditor
 		
 		public SearchResult FindNext (bool setSelection)
 		{
+			if (SearchEngine.SearchRequest == null || string.IsNullOrEmpty (SearchEngine.SearchRequest.SearchPattern))
+				return null;
+
 			int startOffset = Caret.Offset;
 			if (IsSomethingSelected && IsMatchAt (startOffset)) {
 				startOffset = MainSelection.GetLeadOffset (this);
@@ -1017,6 +1025,8 @@ namespace Mono.TextEditor
 		
 		public SearchResult FindPrevious (bool setSelection)
 		{
+			if (SearchEngine.SearchRequest == null || string.IsNullOrEmpty (SearchEngine.SearchRequest.SearchPattern))
+				return null;
 			int startOffset = Caret.Offset - SearchEngine.SearchRequest.SearchPattern.Length;
 			if (IsSomethingSelected && IsMatchAt (MainSelection.GetAnchorOffset (this))) 
 				startOffset = MainSelection.GetAnchorOffset (this);
@@ -1133,7 +1143,6 @@ namespace Mono.TextEditor
 
 		int EnsureIsNotVirtual (int line, int column)
 		{
-			Debug.Assert (document.IsInAtomicUndo);
 			DocumentLine documentLine = Document.GetLine (line);
 			if (documentLine == null)
 				return 0;
@@ -1197,12 +1206,18 @@ namespace Mono.TextEditor
 		public int PasteText (int offset, string text, byte[] copyData, ref IDisposable undoGroup)
 		{
 			if (TextPasteHandler != null) {
-				var newText = TextPasteHandler.FormatPlainText (offset, text, copyData);
+				string newText;
+				try {
+					newText = TextPasteHandler.FormatPlainText (offset, text, copyData);
+				} catch (Exception e) {
+					Console.WriteLine ("Text paste handler exception:" + e);
+					newText = text;
+				}
 				if (newText != text) {
-					Insert (offset, text);
+					var inserted = Insert (offset, text);
 					undoGroup.Dispose ();
 					undoGroup = OpenUndoGroup ();
-					var result = Replace (offset, text.Length, newText);
+					var result = Replace (offset, inserted, newText);
 					if (Paste != null)
 						Paste (offset, text, result);
 					return result;
@@ -1304,7 +1319,7 @@ namespace Mono.TextEditor
 		
 		public int LineCount {
 			get {
-				return Document.LineCount;
+				return Document != null ? Document.LineCount : 0;
 			}
 		}
 		
@@ -1351,6 +1366,11 @@ namespace Mono.TextEditor
 		public IDisposable OpenUndoGroup()
 		{
 			return Document.OpenUndoGroup ();
+		}
+
+		public IDisposable OpenUndoGroup(OperationType operationType)
+		{
+			return Document.OpenUndoGroup (operationType);
 		}
 		#endregion
 		

@@ -82,13 +82,13 @@ namespace Mono.TextEditor
 			{
 			}
 
-			string GetCopiedPlainText ()
+			string GetCopiedPlainText (string eol = "\n")
 			{
 				var plainText = new StringBuilder ();
 				bool first = true;
 				foreach (var line in copiedColoredChunks) {
 					if (!first) {
-						plainText.AppendLine ();
+						plainText.Append (eol);
 					} else {
 						first = false;
 					}
@@ -106,10 +106,6 @@ namespace Mono.TextEditor
 					return;
 				switch (info) {
 				case TextType:
-					// Windows specific hack to work around bug: Bug 661973 - copy operation in TextEditor braks text lines with duplicate line endings when the file has CRLF
-					// Remove when https://bugzilla.gnome.org/show_bug.cgi?id=640439 is fixed.
-
-
 					selection_data.Text = GetCopiedPlainText ();
 					break;
 				case RichTextType:
@@ -155,7 +151,7 @@ namespace Mono.TextEditor
 			internal List<List<ColoredSegment>> copiedColoredChunks;
 			byte[] copyData;
 
-			public Mono.TextEditor.Highlighting.ColorScheme docStyle;
+			public ColorScheme docStyle;
 			ITextEditorOptions options;
 
 			public static readonly TargetEntry[] TargetEntries;
@@ -212,8 +208,13 @@ namespace Mono.TextEditor
 						var segment = selection.GetSelectionRange (data);
 						copiedColoredChunks = ColoredSegment.GetChunks (data, segment);
 						var pasteHandler = data.TextPasteHandler;
-						if (pasteHandler != null)
-							copyData = pasteHandler.GetCopyData (segment);
+						if (pasteHandler != null) {
+							try {
+								copyData = pasteHandler.GetCopyData (segment);
+							} catch (Exception e) {
+								Console.WriteLine ("Exception while getting copy data:" + e);
+							}
+						}
 						break;
 					case SelectionMode.Block:
 						isBlockMode = true;
@@ -291,7 +292,7 @@ namespace Mono.TextEditor
 						byte[] copyData = new byte[selBytes[1]];
 						Array.Copy (selBytes, 2, copyData, 0, copyData.Length);
 						var rawTextOffset = 1 + 1 + copyData.Length;
-						string text = System.Text.Encoding.UTF8.GetString (selBytes, rawTextOffset, selBytes.Length - rawTextOffset);
+						string text = Encoding.UTF8.GetString (selBytes, rawTextOffset, selBytes.Length - rawTextOffset);
 						bool pasteBlock = (selBytes [0] & 1) == 1;
 						bool pasteLine = (selBytes [0] & 2) == 2;
 						if (pasteBlock) {
@@ -299,6 +300,7 @@ namespace Mono.TextEditor
 								var version = data.Document.Version;
 								if (!preserveSelection)
 									data.DeleteSelectedText (!data.IsSomethingSelected || data.MainSelection.SelectionMode != SelectionMode.Block);
+								int startLine = data.Caret.Line;
 								data.EnsureCaretIsNotVirtual ();
 								insertionOffset = version.MoveOffsetTo (data.Document.Version, insertionOffset);
 
@@ -343,6 +345,7 @@ namespace Mono.TextEditor
 								}
 								if (!preserveState)
 									data.ClearSelection ();
+								data.FixVirtualIndentation (startLine); 
 								data.Caret.PreserveSelection = false;
 							}
 						} else if (pasteLine) {
@@ -359,6 +362,7 @@ namespace Mono.TextEditor
 								if (!preserveState)
 									data.ClearSelection ();
 								data.Caret.PreserveSelection = false;
+								data.FixVirtualIndentation (curLine.LineNumber); 
 							}
 						} else {
 							result = PastePlainText (data, insertionOffset, text, preserveSelection, copyData);
@@ -387,6 +391,7 @@ namespace Mono.TextEditor
 			var version = data.Document.Version;
 			if (!preserveSelection)
 				data.DeleteSelectedText (!data.IsSomethingSelected || data.MainSelection.SelectionMode != SelectionMode.Block);
+			int startLine = data.Caret.Line;
 			data.EnsureCaretIsNotVirtual ();
 			if (data.IsSomethingSelected && data.MainSelection.SelectionMode == SelectionMode.Block) {
 				var selection = data.MainSelection;
@@ -410,6 +415,8 @@ namespace Mono.TextEditor
 				offset = version.MoveOffsetTo (data.Document.Version, offset);
 				inserted = data.PasteText (offset, text, copyData, ref undo);
 			}
+			data.FixVirtualIndentation (startLine); 
+
 			undo.Dispose ();
 			return inserted;
 		}

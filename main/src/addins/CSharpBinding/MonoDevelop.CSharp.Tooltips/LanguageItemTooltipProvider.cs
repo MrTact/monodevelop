@@ -48,7 +48,7 @@ using MonoDevelop.Projects;
 
 namespace MonoDevelop.SourceEditor
 {
-	public class LanguageItemTooltipProvider: TooltipProvider, IDisposable
+	class LanguageItemTooltipProvider: TooltipProvider, IDisposable
 	{
 		public LanguageItemTooltipProvider ()
 		{
@@ -126,6 +126,8 @@ namespace MonoDevelop.SourceEditor
 		public void Dispose ()
 		{
 			DestroyLastTooltipWindow ();
+			lastNode = null;
+			lastResult = null;
 		}
 
 		#endregion
@@ -231,6 +233,12 @@ namespace MonoDevelop.SourceEditor
 					var sig = new SignatureMarkupCreator (resolver, doc.GetFormattingPolicy ().CreateOptions ());
 					sig.BreakLineAfterReturnType = false;
 					return sig.GetKeywordTooltip ("void", null);
+				}
+				if (data.Node is NullReferenceExpression) {
+					var resolver = (doc.ParsedDocument.ParsedFile as CSharpUnresolvedFile).GetResolver (doc.Compilation, doc.Editor.Caret.Location);
+					var sig = new SignatureMarkupCreator (resolver, doc.GetFormattingPolicy ().CreateOptions ());
+					sig.BreakLineAfterReturnType = false;
+					return sig.GetKeywordTooltip ("null", null);
 				}
 
 				if (result is UnknownIdentifierResolveResult) {

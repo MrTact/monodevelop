@@ -39,7 +39,7 @@ namespace MonoDevelop.CSharp.Formatting
 	[PolicyType ("C# formatting")]
 	public class CSharpFormattingPolicy : IEquatable<CSharpFormattingPolicy>
 	{
-		CSharpFormattingOptions options = FormattingOptionsFactory.CreateMono ();
+		readonly CSharpFormattingOptions options = FormattingOptionsFactory.CreateMono ();
 		
 		public string Name {
 			get;
@@ -215,15 +215,34 @@ namespace MonoDevelop.CSharp.Formatting
 		}
 		
 		[ItemProperty]
-		public PropertyFormatting PropertyFormatting {
+		public PropertyFormatting SimplePropertyFormatting {
 			get {
-				return options.PropertyFormatting;
+				return options.SimplePropertyFormatting;
 			}
 			set {
-				options.PropertyFormatting = value;
+				options.SimplePropertyFormatting = value;
 			}
 		}
-		
+
+		[ItemProperty]
+		public PropertyFormatting AutoPropertyFormatting {
+			get {
+				return options.AutoPropertyFormatting;
+			}
+			set {
+				options.AutoPropertyFormatting = value;
+			}
+		}
+
+		[ItemProperty]
+		public bool IndentPreprocessorDirectives {
+			get {
+				return options.IndentPreprocessorDirectives;
+			}
+			set {
+				options.IndentPreprocessorDirectives = value;
+			}
+		}
 		#endregion
 		
 		#region Braces
@@ -346,24 +365,25 @@ namespace MonoDevelop.CSharp.Formatting
 				options.PropertySetBraceStyle = value;
 			}
 		}
-		
+
 		[ItemProperty]
-		public bool AllowPropertyGetBlockInline {
+		public PropertyFormatting SimpleGetBlockFormatting {
 			get {
-				return options.AllowPropertyGetBlockInline;
+				return options.SimpleGetBlockFormatting;
 			}
 			set {
-				options.AllowPropertyGetBlockInline = value;
+				options.SimpleGetBlockFormatting = value;
 			}
 		}
-		
+
 		[ItemProperty]
-		public bool AllowPropertySetBlockInline {
+		public PropertyFormatting SimpleSetBlockFormatting {
 			get {
-				return options.AllowPropertySetBlockInline;
+
+				return options.SimpleSetBlockFormatting;
 			}
 			set {
-				options.AllowPropertySetBlockInline = value;
+				options.SimpleSetBlockFormatting = value;
 			}
 		}
 		
@@ -489,6 +509,18 @@ namespace MonoDevelop.CSharp.Formatting
 				options.WhileNewLinePlacement = value;
 			}
 		}
+
+		[ItemProperty]
+		public NewLinePlacement EmbeddedStatementPlacement {
+			get {
+				return options.EmbeddedStatementPlacement;
+			}
+			set {
+				options.EmbeddedStatementPlacement = value;
+			}
+		}
+
+
 		
 		[ItemProperty]
 		public Wrapping ArrayInitializerWrapping {
@@ -500,7 +532,7 @@ namespace MonoDevelop.CSharp.Formatting
 			}
 		}
 
-		[ItemProperty]
+	[ItemProperty]
 		public BraceStyle ArrayInitializerBraceStyle {
 			get {
 				return options.ArrayInitializerBraceStyle;
@@ -994,7 +1026,38 @@ namespace MonoDevelop.CSharp.Formatting
 				options.SpaceAroundNullCoalescingOperator = value;
 			}
 		}
-		
+
+		[ItemProperty]
+		public bool SpaceAfterUnsafeAddressOfOperator {
+			get {
+				return options.SpaceAfterUnsafeAddressOfOperator;
+			}
+			set {
+				options.SpaceAfterUnsafeAddressOfOperator = value;
+			}
+		}
+
+
+		[ItemProperty]
+		public bool SpaceAfterUnsafeAsteriskOfOperator {
+			get {
+				return options.SpaceAfterUnsafeAsteriskOfOperator;
+			}
+			set {
+				options.SpaceAfterUnsafeAsteriskOfOperator = value;
+			}
+		}
+
+		[ItemProperty]
+		public bool SpaceAroundUnsafeArrowOperator {
+			get {
+				return options.SpaceAroundUnsafeArrowOperator;
+			}
+			set {
+				options.SpaceAroundUnsafeArrowOperator = value;
+			}
+		}
+
 		[ItemProperty]
 		public bool WithinParentheses {
 			get {
@@ -1376,6 +1439,26 @@ namespace MonoDevelop.CSharp.Formatting
 				options.BlankLinesBetweenMembers = value;
 			}
 		}
+
+		[ItemProperty]
+		public int BlankLinesAroundRegion {
+			get {
+				return options.BlankLinesAroundRegion;
+			}
+			set {
+				options.BlankLinesAroundRegion = value;
+			}
+		}
+
+		[ItemProperty]
+		public int BlankLinesInsideRegion {
+			get {
+				return options.BlankLinesInsideRegion;
+			}
+			set {
+				options.BlankLinesInsideRegion = value;
+			}
+		}
 		#endregion
 
 		#region Wrapping
@@ -1555,9 +1638,9 @@ namespace MonoDevelop.CSharp.Formatting
 		
 		public static CSharpFormattingPolicy Load (System.IO.Stream input)
 		{
-			CSharpFormattingPolicy result = new CSharpFormattingPolicy ();
+			var result = new CSharpFormattingPolicy ();
 			result.Name = "noname";
-			using (XmlTextReader reader = new XmlTextReader (input)) {
+			using (var reader = new XmlTextReader (input)) {
 				while (reader.Read ()) {
 					if (reader.NodeType == XmlNodeType.Element) {
 						if (reader.LocalName == "Property") {

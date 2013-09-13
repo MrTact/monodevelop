@@ -51,6 +51,8 @@ using System.Diagnostics;
 using ICSharpCode.NRefactory.Documentation;
 using ICSharpCode.NRefactory.TypeSystem.Implementation;
 using System.Text;
+using MonoDevelop.Ide.TypeSystem;
+using ICSharpCode.NRefactory.TypeSystem;
 
 namespace MonoDevelop.Ide
 {
@@ -285,9 +287,11 @@ namespace MonoDevelop.Ide
 			} else {
 				fileName = entity.Region.FileName;
 			}
+			var project = (entity is ITypeDefinition ? ((ITypeDefinition )entity) : entity.DeclaringTypeDefinition).GetProjectWhereTypeIsDefined ();
 			var doc = IdeApp.Workbench.OpenDocument (fileName,
-			                               entity.Region.BeginLine,
-			                               entity.Region.BeginColumn);
+				project,
+				entity.Region.BeginLine,
+				entity.Region.BeginColumn);
 
 			if (isCecilProjectContent && doc != null) {
 				doc.RunWhenLoaded (delegate {
@@ -303,7 +307,8 @@ namespace MonoDevelop.Ide
 			if (entity == null)
 				throw new ArgumentNullException ("entity");
 			string fileName = entity.Region.FileName;
-			IdeApp.Workbench.OpenDocument (fileName, entity.Region.BeginLine, entity.Region.BeginColumn);
+			// variables are always in the same file -> file is already open, project not needed.
+			IdeApp.Workbench.OpenDocument (fileName, null, entity.Region.BeginLine, entity.Region.BeginColumn);
 		}
 
 		public void RenameItem (IWorkspaceFileObject item, string newName)
@@ -527,8 +532,13 @@ namespace MonoDevelop.Ide
 		
 		public void MarkFileDirty (string filename)
 		{
-			FileInfo fi = new FileInfo (filename);
-			fi.LastWriteTime = DateTime.Now;
+			try {
+				var fi = new FileInfo (filename);
+				if (fi.Exists)
+					fi.LastWriteTime = DateTime.Now;
+			} catch (Exception e) {
+				LoggingService.LogError ("Error while marking file as dirty", e);
+			}
 		}
 		
 		public void ShowOptions (IWorkspaceObject entry)
@@ -747,11 +757,11 @@ namespace MonoDevelop.Ide
 					var newRefs = selDialog.ReferenceInformations;
 					
 					var editEventArgs = new EditReferencesEventArgs (project);
-					foreach (ProjectReference refInfo in project.References)
+					foreach (var refInfo in project.References)
 						if (!newRefs.Contains (refInfo))
 							editEventArgs.ReferencesToRemove.Add (refInfo);
 
-					foreach (ProjectReference refInfo in selDialog.ReferenceInformations)
+					foreach (var refInfo in selDialog.ReferenceInformations)
 						if (!project.References.Contains (refInfo))
 							editEventArgs.ReferencesToAdd.Add(refInfo);
 
@@ -1600,8 +1610,8 @@ namespace MonoDevelop.Ide
 						var virtualPath = sourcePath.ToRelative (sourceProject.BaseDirectory);
 						// Grab all the child nodes of the folder we just dragged/dropped
 						filesToRemove = sourceProject.Files.GetFilesInVirtualPath (virtualPath).ToList ();
-						// Add the folder itself so we can remove it from the soruce project if its a Move operation
-						var folder = sourceProject.Files.Where (f => f.ProjectVirtualPath == virtualPath).FirstOrDefault ();
+						// Add the folder itself so we can remove it from the source project if its a Move operation
+						var folder = sourceProject.Files.FirstOrDefault (f => f.ProjectVirtualPath == virtualPath);
 						if (folder != null)
 							filesToRemove.Add (folder);
 					} else {
@@ -2045,10 +2055,12 @@ namespace MonoDevelop.Ide
 		
 		public IEditableTextFile GetEditableTextFile (FilePath filePath)
 		{
-			foreach (var doc in IdeApp.Workbench.Documents) {
-				if (doc.FileName == filePath) {
-					IEditableTextFile ef = doc.GetContent<IEditableTextFile> ();
-					if (ef != null) return ef;
+			if (IdeApp.IsInitialized) {
+				foreach (var doc in IdeApp.Workbench.Documents) {
+					if (doc.FileName == filePath) {
+						IEditableTextFile ef = doc.GetContent<IEditableTextFile> ();
+						if (ef != null) return ef;
+					}
 				}
 			}
 			

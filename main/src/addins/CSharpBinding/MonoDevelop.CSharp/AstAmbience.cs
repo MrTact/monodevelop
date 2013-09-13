@@ -32,7 +32,7 @@ using MonoDevelop.Core;
 
 namespace MonoDevelop.CSharp
 {
-	public class AstAmbience
+	class AstAmbience
 	{
 		CSharpFormattingOptions options;
 		
@@ -155,7 +155,7 @@ namespace MonoDevelop.CSharp
 				}
 			} else if (e is OperatorDeclaration) {
 				var op = e as OperatorDeclaration;
-				sb.Append ("operator");
+				sb.Append ("operator ");
 				if (!op.OperatorTypeToken.IsNull)
 					AppendEscaped (sb, op.OperatorTypeToken.ToString ());
 				AppendParameter (sb, op.Parameters);
@@ -216,8 +216,18 @@ namespace MonoDevelop.CSharp
 				sb.Append (initializer.Name);
 				if (IsObsolete (initializer.Parent as EntityDeclaration))
 					return "<s>" + sb.ToString () + "</s>";
+			} else if (e is FixedVariableInitializer) {
+				var initializer = (FixedVariableInitializer)e;
+				sb.Append (initializer.Name);
+				if (IsObsolete (initializer.Parent as EntityDeclaration))
+					return "<s>" + sb.ToString () + "</s>";
 			} else if (e is FieldDeclaration) {
 				var field = (FieldDeclaration)e;
+				if (!field.Variables.Any ())
+					return "";
+				sb.Append (field.Variables.First ().Name);
+			} else if (e is FixedFieldDeclaration) {
+				var field = (FixedFieldDeclaration)e;
 				if (!field.Variables.Any ())
 					return "";
 				sb.Append (field.Variables.First ().Name);

@@ -36,7 +36,7 @@ namespace MonoDevelop.Ide.CodeCompletion
 		
 		public static bool IsVisible {
 			get {
-				return wnd != null /*&& wnd.Visible*/;
+				return wnd != null && wnd.Visible;
 			}
 		}
 		
@@ -61,12 +61,12 @@ namespace MonoDevelop.Ide.CodeCompletion
 				return wnd.CodeCompletionContext;
 			}
 		}
-		
-		static bool forceSuggestionMode;
+
+		static PropertyWrapper<bool> forceSuggestionMode = PropertyService.Wrap ("ForceCompletionSuggestionMode", false);
 		public static bool ForceSuggestionMode {
 			get { return forceSuggestionMode; }
 			set {
-				forceSuggestionMode = value; 
+				forceSuggestionMode.Value = value; 
 				if (wnd != null) {
 					wnd.AutoCompleteEmptyMatch = wnd.AutoSelect = !forceSuggestionMode;
 				}
@@ -138,16 +138,20 @@ namespace MonoDevelop.Ide.CodeCompletion
 		{
 			if (!IsVisible)
 				return false;
+			if (keyChar != '\0') {
+				wnd.EndOffset = wnd.StartOffset + wnd.CurrentPartialWord.Length + 1;
+			}
 			return wnd.PreProcessKeyEvent (key, keyChar, modifier);
 		}
 
 		public static void UpdateCursorPosition ()
 		{
-			if (!IsVisible) 
+			if (!IsVisible)
 				return;
-			if (wnd.CompletionWidget.CaretOffset < wnd.StartOffset)
-				DestroyWindow ();
 
+			var caretOffset = wnd.CompletionWidget.CaretOffset;
+			if (caretOffset < wnd.StartOffset || caretOffset > wnd.EndOffset)
+				HideWindow ();
 		}
 
 		public static void UpdateWordSelection (string text)
@@ -179,9 +183,9 @@ namespace MonoDevelop.Ide.CodeCompletion
 			ParameterInformationWindowManager.UpdateWindow (wnd.Extension, wnd.CompletionWidget);
 			if (wnd.Extension != null)
 				wnd.Extension.document.Editor.FixVirtualIndentation ();
-//			wnd.HideWindow ();
-//			OnWindowClosed (EventArgs.Empty);
-			DestroyWindow ();
+			wnd.HideWindow ();
+			OnWindowClosed (EventArgs.Empty);
+			//DestroyWindow ();
 		}
 		
 		

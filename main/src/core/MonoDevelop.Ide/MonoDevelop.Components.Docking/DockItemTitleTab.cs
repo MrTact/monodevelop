@@ -278,10 +278,12 @@ namespace MonoDevelop.Components.Docking
 		{
 			if (tabActivated) {
 				tabActivated = false;
-				if (item.Status == DockItemStatus.AutoHide)
-					item.Status = DockItemStatus.Dockable;
-				else
-					item.Status = DockItemStatus.AutoHide;
+				if (!item.Behavior.HasFlag (DockItemBehavior.CantAutoHide)) {
+					if (item.Status == DockItemStatus.AutoHide)
+						item.Status = DockItemStatus.Dockable;
+					else
+						item.Status = DockItemStatus.AutoHide;
+				}
 			}
 			else if (!evnt.TriggersContextMenu () && evnt.Button == 1) {
 				frame.DockInPlaceholder (item);
@@ -297,7 +299,7 @@ namespace MonoDevelop.Components.Docking
 
 		protected override bool OnMotionNotifyEvent (Gdk.EventMotion evnt)
 		{
-			if (tabPressed && Math.Abs (evnt.X - pressX) > 3 && Math.Abs (evnt.Y - pressY) > 3) {
+			if (tabPressed && !item.Behavior.HasFlag (DockItemBehavior.NoGrip) && Math.Abs (evnt.X - pressX) > 3 && Math.Abs (evnt.Y - pressY) > 3) {
 				frame.ShowPlaceholder (item);
 				GdkWindow.Cursor = fleurCursor;
 				frame.Toplevel.KeyPressEvent += HeaderKeyPress;
@@ -452,13 +454,13 @@ namespace MonoDevelop.Components.Docking
 				using (var g = new Cairo.LinearGradient (x, y + 1, x, y + Allocation.Height - 1)) {
 					g.AddColorStop (0, Styles.DockTabBarGradientStart);
 					g.AddColorStop (1, Styles.DockTabBarGradientEnd);
-					ctx.Pattern = g;
+					ctx.SetSource (g);
 					ctx.Fill ();
 				}
 
 				ctx.MoveTo (x + 0.5, y + 0.5);
 				ctx.LineTo (x + Allocation.Width - 0.5d, y + 0.5);
-				ctx.Color = Styles.DockTabBarGradientTop;
+				ctx.SetSourceColor (Styles.DockTabBarGradientTop);
 				ctx.Stroke ();
 
 				if (active) {
@@ -468,7 +470,7 @@ namespace MonoDevelop.Components.Docking
 						g.AddColorStop (0, new Cairo.Color (0, 0, 0, 0.01));
 						g.AddColorStop (0.5, new Cairo.Color (0, 0, 0, 0.08));
 						g.AddColorStop (1, new Cairo.Color (0, 0, 0, 0.01));
-						ctx.Pattern = g;
+						ctx.SetSource (g);
 						ctx.Fill ();
 					}
 

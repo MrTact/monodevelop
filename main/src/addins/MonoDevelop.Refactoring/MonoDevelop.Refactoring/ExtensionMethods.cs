@@ -31,16 +31,51 @@ using ICSharpCode.NRefactory.CSharp.TypeSystem;
 using ICSharpCode.NRefactory.TypeSystem;
 using ICSharpCode.NRefactory.Semantics;
 using System.Threading.Tasks;
+using MonoDevelop.Core;
+using System.Threading;
+using MonoDevelop.Core.Instrumentation;
 
 namespace MonoDevelop.Refactoring
 {
     public static class ExtensionMethods
     {
+
 		class ResolverAnnotation
 		{
-			public Task<CSharpAstResolver> Task;
+			public CancellationTokenSource SharedTokenSource;
+			public TaskWrapper Task;
 			public CSharpUnresolvedFile ParsedFile;
 		}
+
+		public class TaskWrapper {
+			readonly Task<CSharpAstResolver> underlyingTask;
+
+			public CSharpAstResolver Result {
+				get {
+					if (underlyingTask.IsCanceled)
+						return null;
+					try {
+						return underlyingTask.Result;
+					} catch (AggregateException ae) {
+						if (ae.InnerException is TaskCanceledException)
+							return null;
+						throw;
+					}  catch (TaskCanceledException) {
+						return null;
+					} catch (Exception e) {
+						LoggingService.LogWarning ("Exception while getting shared AST resolver.", e);
+						return null;
+					}
+				}
+			}
+			public TaskWrapper (Task<CSharpAstResolver> underlyingTask)
+			{
+				this.underlyingTask = underlyingTask;
+			}
+			
+		}
+
+		public static TimerCounter ResolveCounter = InstrumentationService.CreateTimerCounter("Resolve document", "Parsing");
 
 		/// <summary>
 		/// Returns a full C# syntax tree resolver which is shared between semantic highlighting, source analysis and refactoring.
@@ -48,38 +83,54 @@ namespace MonoDevelop.Refactoring
 		/// resolve navigator.
 		/// Note: The shared resolver is fully resolved.
 		/// </summary>
-		public static Task<CSharpAstResolver> GetSharedResolver (this Document document)
+		public static TaskWrapper GetSharedResolver (this Document document)
 		{
 			var parsedDocument = document.ParsedDocument;
 			if (parsedDocument == null)
 				return null;
-			
+
 			var unit       = parsedDocument.GetAst<SyntaxTree> ();
 			var parsedFile = parsedDocument.ParsedFile as CSharpUnresolvedFile;
 			if (unit == null || parsedFile == null)
 				return null;
-			
+			var compilation = document.Compilation;
+
 			var resolverAnnotation = document.Annotation<ResolverAnnotation> ();
 
 			if (resolverAnnotation != null) {
 				if (resolverAnnotation.ParsedFile == parsedFile)
 					return resolverAnnotation.Task;
+				if (resolverAnnotation.SharedTokenSource != null)
+					resolverAnnotation.SharedTokenSource.Cancel ();
 				document.RemoveAnnotations<ResolverAnnotation> ();
 			}
 
+			var tokenSource = new CancellationTokenSource ();
+			var token = tokenSource.Token;
 			var resolveTask = Task.Factory.StartNew (delegate {
-				var result = new CSharpAstResolver (document.Compilation, unit, parsedFile);
-				result.ApplyNavigator (new ConstantModeResolveVisitorNavigator (ResolveVisitorNavigationMode.Resolve, null));
-				return result;
-			});
+				try {
+					using (var timer = ResolveCounter.BeginTiming ()) {
+						var result = new CSharpAstResolver (compilation, unit, parsedFile);
+						result.ApplyNavigator (new ConstantModeResolveVisitorNavigator (ResolveVisitorNavigationMode.Resolve, null), token);
+						return result;
+					}
+				} catch (OperationCanceledException) {
+					return null;
+				} catch (Exception e) {
+					LoggingService.LogError ("Error while creating the resolver.", e);
+					return null;
+				}
+			}, token);
+			var wrapper = new TaskWrapper (resolveTask);
 			document.AddAnnotation (new ResolverAnnotation {
-				Task = resolveTask,
-				ParsedFile = parsedFile
+				Task = wrapper,
+				ParsedFile = parsedFile,
+				SharedTokenSource = tokenSource
 			});
-			return resolveTask;
+			return wrapper;
 		}
 
-		sealed class ConstantModeResolveVisitorNavigator : IResolveVisitorNavigator
+		public sealed class ConstantModeResolveVisitorNavigator : IResolveVisitorNavigator
 		{
 			readonly ResolveVisitorNavigationMode mode;
 			readonly IResolveVisitorNavigator targetForResolveCalls;

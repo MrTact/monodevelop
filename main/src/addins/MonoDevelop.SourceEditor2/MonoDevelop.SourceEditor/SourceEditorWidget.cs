@@ -216,6 +216,12 @@ namespace MonoDevelop.SourceEditor
 				}
 			}
 
+			public QuickTaskStrip Strip {
+				get {
+					return strip;
+				}
+			}
+
 			public DecoratedScrolledWindow (SourceEditorWidget parent)
 			{
 				this.parent = parent;
@@ -379,7 +385,8 @@ namespace MonoDevelop.SourceEditor
 				this.lastActiveEditor = null;
 				this.splittedTextEditor = null;
 				view = null;
-				
+				parsedDocument = null;
+
 //				IdeApp.Workbench.StatusBar.ClearCaretState ();
 				if (parseInformationUpdaterWorkerThread != null) {
 					parseInformationUpdaterWorkerThread.Dispose ();
@@ -898,13 +905,17 @@ namespace MonoDevelop.SourceEditor
 		internal void ConvertLineEndings ()
 		{
 			string correctEol = TextEditor.Options.DefaultEolMarker;
-			var newText = new System.Text.StringBuilder ();
+			var newText = new StringBuilder ();
+			int offset = 0;
 			foreach (var line in Document.Lines) {
-				newText.Append (TextEditor.GetTextAt (line.Offset, line.Length));
+				newText.Append (TextEditor.GetTextAt (offset, line.Length));
+				offset += line.LengthIncludingDelimiter;
 				if (line.DelimiterLength > 0)
 					newText.Append (correctEol);
 			}
+			view.StoreSettings ();
 			TextEditor.Text = newText.ToString ();
+			view.LoadSettings ();
 		}
 
 		void ShowIncorretEolMarkers (string fileName, bool multiple)
@@ -1046,6 +1057,9 @@ namespace MonoDevelop.SourceEditor
 		public void Reload ()
 		{
 			try {
+				if (!System.IO.File.Exists (view.ContentName))
+					return;
+
 				view.StoreSettings ();
 				reloadSettings = true;
 				view.Load (view.ContentName);
@@ -1602,7 +1616,36 @@ namespace MonoDevelop.SourceEditor
 			OnTasksUpdated (EventArgs.Empty);
 		}
 		#endregion
-	
+
+		internal void NextIssue ()
+		{
+			if (!QuickTaskStrip.EnableFancyFeatures)
+				return;
+			mainsw.Strip.GotoTask (mainsw.Strip.SearchNextTask (QuickTaskStrip.HoverMode.NextMessage));
+		}	
+
+		internal void PrevIssue ()
+		{
+			if (!QuickTaskStrip.EnableFancyFeatures)
+				return;
+			mainsw.Strip.GotoTask (mainsw.Strip.SearchPrevTask (QuickTaskStrip.HoverMode.NextMessage));
+		}
+
+		internal void NextIssueError ()
+		{
+			if (!QuickTaskStrip.EnableFancyFeatures)
+				return;
+			mainsw.Strip.GotoTask (mainsw.Strip.SearchNextTask (QuickTaskStrip.HoverMode.NextError));
+		}	
+
+		internal void PrevIssueError ()
+		{
+			if (!QuickTaskStrip.EnableFancyFeatures)
+				return;
+			mainsw.Strip.GotoTask (mainsw.Strip.SearchPrevTask (QuickTaskStrip.HoverMode.NextError));
+		}
+
+
 	}
 
 	class ErrorMarker : UnderlineMarker
@@ -1616,7 +1659,7 @@ namespace MonoDevelop.SourceEditor
 			// may be null if no line is assigned to the error.
 			Wave = true;
 			
-			StartCol = Info.Region.BeginColumn + 1;
+			StartCol = Info.Region.BeginColumn;
 			if (Info.Region.EndColumn > StartCol) {
 				EndCol = Info.Region.EndColumn;
 			} else {
@@ -1636,11 +1679,11 @@ namespace MonoDevelop.SourceEditor
 			}
 		}
 
-		public override void Draw (TextEditor editor, Cairo.Context cr, Pango.Layout layout, bool selected, int startOffset, int endOffset, double y, double startXPos, double endXPos)
+		public override void Draw (TextEditor editor, Cairo.Context cr, double y, LineMetrics metrics)
 		{
 			Color = Info.ErrorType == ErrorType.Warning ? editor.ColorStyle.UnderlineWarning.Color : editor.ColorStyle.UnderlineError.Color;
 
-			base.Draw (editor, cr, layout, selected, startOffset, endOffset, y, startXPos, endXPos);
+			base.Draw (editor, cr, y, metrics);
 		}
 	}
 }

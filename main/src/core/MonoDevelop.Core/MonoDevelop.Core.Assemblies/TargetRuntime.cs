@@ -281,7 +281,20 @@ namespace MonoDevelop.Core.Assemblies
 		{
 			return GetBackend (fx).GetFrameworkFolders ();
 		}
-		
+
+		public IEnumerable<string> FindFacadeAssembliesForPCL (TargetFramework tx)
+		{
+			foreach (var folder in GetFrameworkFolders (tx)) {
+				var facades = Path.Combine (folder, "Facades");
+				if (!Directory.Exists (facades))
+					continue;
+
+				return Directory.GetFiles (facades, "*.dll");
+			}
+
+			return new string[0];
+		}
+
 		/// <summary>
 		/// Returns a list of environment variables that should be set when running tools using this runtime
 		/// </summary>
@@ -466,7 +479,7 @@ namespace MonoDevelop.Core.Assemblies
 		/// Set to true if this package is provided by an add-in and is not installed in the system.
 		/// </param>
 		/// <param name="assemblyFiles">
-		/// A <see cref="System.String[]"/>
+		/// The assemblies of the package.
 		/// </param>
 		/// <returns>
 		/// A <see cref="SystemPackage"/>

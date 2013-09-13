@@ -2,19 +2,20 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
-using System.Threading;
 
 using System.Runtime.InteropServices;
 using MonoDevelop.Core;
-using MonoDevelop.VersionControl.Subversion.Gui;
 using System.Text;
 
-using svn_revnum_t = System.Int32;
+using svn_revnum_t = System.IntPtr;
 using size_t = System.Int32;
+using off_t = System.Int64;
+using MonoDevelop.Projects.Text;
+using System.Timers;
 
 namespace MonoDevelop.VersionControl.Subversion.Unix
 {
-	class SvnClient : SubversionVersionControl
+	public class SvnClient : SubversionVersionControl
 	{
 		internal static LibApr apr;
 		static Lazy<bool> isInstalled;
@@ -28,11 +29,13 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 		public static void CheckError (IntPtr error, int? allowedError)
 		{
 			string msg = null;
+			int errorCode = 0; // Innermost error-code.
 			while (error != IntPtr.Zero) {
 				LibSvnClient.svn_error_t error_t = (LibSvnClient.svn_error_t) Marshal.PtrToStructure (error, typeof (LibSvnClient.svn_error_t));
 				if (allowedError.HasValue && error_t.apr_err == allowedError.Value)
 					return;
 
+				errorCode = error_t.apr_err;
 				if (msg != null)
 					msg += "\n" + GetErrorMessage (error_t);
 				else
@@ -41,9 +44,9 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 
 				if (msg == null)
 					msg = GettextCatalog.GetString ("Unknown error");
-
-				throw new SubversionException (msg);
 			}
+			if (msg != null)
+				throw new SubversionException (msg, errorCode);
 		}
 		
 		static string GetErrorMessage (LibSvnClient.svn_error_t error)
@@ -74,10 +77,10 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 			return Marshal.PtrToStringAnsi (res);
 		}
 
-		static bool CheckInstalled ()
+		internal static bool CheckInstalled ()
 		{
 			// libsvn_client may be linked to libapr-0 or libapr-1, and we need to bind the LibApr class
-			// the the same library. The following code detects the required libapr version and loads it. 
+			// to the same library. The following code detects the required libapr version and loads it. 
 			int aprver = GetLoadAprLib (-1);
 			svn = LibSvnClient.GetLib ();
 			if (svn == null) {
@@ -104,21 +107,15 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 				int newv = oldVersion;
 				if (File.Exists (file)) {
 					string txt = File.ReadAllText (file);
-					if (txt.IndexOf ("libapr-0") != -1 && oldVersion != 0)
+					if (txt.IndexOf ("libapr-0", StringComparison.Ordinal) != -1 && oldVersion != 0)
 						newv = 0;
-					if (txt.IndexOf ("libapr-1") != -1 && oldVersion != 1)
+					if (txt.IndexOf ("libapr-1", StringComparison.Ordinal) != -1 && oldVersion != 1)
 						newv = 1;
 				}
 				return newv;
 			} catch {
 				// Ignore
 				return oldVersion;
-			}
-		}
-
-		public override string Id {
-			get {
-				return "MonoDevelop.VersionControl.Subversion.SubversionVersionControl";
 			}
 		}
 
@@ -155,16 +152,30 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 
 			return Marshal.PtrToStringAnsi (ret);
 		}
+
+		public override string GetDirectoryDotSvn (FilePath path)
+		{
+			UnixSvnBackend backend = CreateBackend () as UnixSvnBackend;
+			bool pre_1_7;
+			string new_path = backend.GetDirectoryDotSvnInternal (path, out pre_1_7);
+			if (pre_1_7)
+				return base.GetDirectoryDotSvn (path);
+			return new_path;
+		}
 	}
 
-	class UnixSvnBackend : SubversionBackend
+	public class UnixSvnBackend : SubversionBackend
 	{
 		protected static LibApr apr {
 			get { return SvnClient.apr; }
 		}
 		
 		protected static LibSvnClient svn {
-			get { return SvnClient.svn; }
+			get {
+				if (SvnClient.svn == null)
+					SvnClient.CheckInstalled ();
+				return SvnClient.svn;
+			}
 		}
 
 		static void CheckError (IntPtr error)
@@ -182,7 +193,8 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 			return SvnClient.newpool (parent);
 		}
 
-		bool disposed  = false;
+		bool pre_1_7;
+		bool disposed = false;
 		IntPtr auth_baton;
 		IntPtr pool;
 		IntPtr ctx;
@@ -198,7 +210,12 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 		LibSvnClient.NotifyLockState requiredLockState;
 
 		// retain this so the delegates aren't GC'ed
-		LibSvnClient.svn_client_ctx_t ctxstruct;
+		LibSvnClient.svn_cancel_func_t cancel_func;
+		LibSvnClient.svn_ra_progress_notify_func_t progress_func;
+		LibSvnClient.svn_wc_notify_func2_t notify_func;
+		LibSvnClient.svn_client_get_commit_log_t log_func;
+		IntPtr config_hash;
+		IntPtr wc_ctx;
 
 		static bool IsBinary (byte[] buffer, long length)
 		{
@@ -211,6 +228,7 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 
 		public UnixSvnBackend ()
 		{
+			pre_1_7 = GetVersion ().StartsWith ("1.6", StringComparison.Ordinal);
 			// Allocate the APR pool and the SVN client context.
 			pool = newpool (IntPtr.Zero);
 
@@ -224,25 +242,39 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 				throw new InvalidOperationException ("Could not create a Subversion client context.");
 			
 			// Set the callbacks on the client context structure.
-			
-			// This is quite a roudabout way of doing this.  The task
-			// is to set the notify field of the unmanaged structure
-			// at the address 'ctx' -- with the address of a delegate.
-			// There's no way to get an address for the delegate directly,
-			// as far as I could figure out, so instead I create a managed
-			// structure that mirrors the start of the unmanaged structure
-			// I want to modify.  Then I marshal the managed structure
-			// *onto* to unmanaged one, overwriting fields in the process.
-			// I don't use references to the structure itself in the API
-			// calls because it needs to be allocated by SVN.  I hope
-			// this doesn't cause any memory leaks.
-			ctxstruct = new LibSvnClient.svn_client_ctx_t ();
-			ctxstruct.NotifyFunc2 = new LibSvnClient.svn_wc_notify_func2_t (svn_wc_notify_func_t_impl);
-			ctxstruct.LogMsgFunc = new LibSvnClient.svn_client_get_commit_log_t (svn_client_get_commit_log_impl);
-			
+			notify_func = new LibSvnClient.svn_wc_notify_func2_t (svn_wc_notify_func_t_impl);
+			Marshal.WriteIntPtr (ctx,
+			                     (int) Marshal.OffsetOf (typeof (LibSvnClient.svn_client_ctx_t), "NotifyFunc2"),
+			                     Marshal.GetFunctionPointerForDelegate (notify_func));
+			log_func = new LibSvnClient.svn_client_get_commit_log_t (svn_client_get_commit_log_impl);
+			Marshal.WriteIntPtr (ctx,
+			                     (int) Marshal.OffsetOf (typeof (LibSvnClient.svn_client_ctx_t), "LogMsgFunc"),
+			                     Marshal.GetFunctionPointerForDelegate (log_func));
+			progress_func = new LibSvnClient.svn_ra_progress_notify_func_t (svn_ra_progress_notify_func_t_impl);
+			Marshal.WriteIntPtr (ctx,
+			                     (int) Marshal.OffsetOf (typeof (LibSvnClient.svn_client_ctx_t), "progress_func"),
+			                     Marshal.GetFunctionPointerForDelegate (progress_func));
+			cancel_func = new LibSvnClient.svn_cancel_func_t (svn_cancel_func_t_impl);
+			Marshal.WriteIntPtr (ctx,
+			                     (int) Marshal.OffsetOf (typeof (LibSvnClient.svn_client_ctx_t), "cancel_func"),
+			                     Marshal.GetFunctionPointerForDelegate (cancel_func));
+
+
 			// Load user and system configuration
-			svn.config_get_config (ref ctxstruct.config, null, pool);
-			
+			svn.config_get_config (ref config_hash, null, pool);
+			Marshal.WriteIntPtr (ctx,
+			                     (int) Marshal.OffsetOf (typeof (LibSvnClient.svn_client_ctx_t), "config"),
+			                     config_hash);
+
+			if (!pre_1_7) {
+				IntPtr scratch = newpool (IntPtr.Zero);
+				svn.wc_context_create (out wc_ctx, config_hash, pool, scratch);
+				Marshal.WriteIntPtr (ctx,
+				                     (int) Marshal.OffsetOf (typeof (LibSvnClient.svn_client_ctx_t), "wc_ctx"),
+				                     wc_ctx);
+				apr.pool_destroy (scratch);
+			}
+
 			IntPtr providers = apr.array_make (pool, 16, IntPtr.Size);
 			IntPtr item;
 			
@@ -285,13 +317,13 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 			
 			item = apr.array_push (providers);
 			svn.client_get_ssl_client_cert_pw_prompt_provider (item, OnAuthSslClientCertPwPromptCallback, IntPtr.Zero, 2, pool);
-			
+
 			// Create the authentication baton			
-			
-			svn.auth_open (out auth_baton, providers, pool); 
-			ctxstruct.auth_baton = auth_baton;
-			
-			Marshal.StructureToPtr (ctxstruct, ctx, false);
+			svn.auth_open (out auth_baton, providers, pool);
+
+			Marshal.WriteIntPtr (ctx,
+			                     (int) Marshal.OffsetOf (typeof(LibSvnClient.svn_client_ctx_t), "auth_baton"),
+			                     auth_baton);
 		}
 		
 		public void Dispose ()
@@ -358,7 +390,7 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 		}
 
 		static LibSvnClient.svn_auth_ssl_server_trust_prompt_func_t OnAuthSslServerTrustPromptCallback = OnAuthSslServerTrustPrompt;
-		static IntPtr OnAuthSslServerTrustPrompt (ref IntPtr cred, IntPtr baton, string realm, uint failures, ref LibSvnClient.svn_auth_ssl_server_cert_info_t cert_info, bool may_save, IntPtr pool)
+		static IntPtr OnAuthSslServerTrustPrompt (ref IntPtr cred, IntPtr baton, string realm, UInt32 failures, ref LibSvnClient.svn_auth_ssl_server_cert_info_t cert_info, bool may_save, IntPtr pool)
 		{
 			LibSvnClient.svn_auth_cred_ssl_server_trust_t data = new LibSvnClient.svn_auth_cred_ssl_server_trust_t ();
 			
@@ -443,17 +475,17 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 			if (pathorurl == null)
 				throw new ArgumentNullException ();
 
-			TryStartOperation ();
 			LibSvnClient.Rev revision = (LibSvnClient.Rev) rev;
-			IntPtr localpool = newpool (pool);
+			IntPtr localpool = TryStartOperation (null);
 			List<DirectoryEntry> items = new List<DirectoryEntry> ();
+
 			try {
 				IntPtr hash;
 				
 				pathorurl = NormalizePath (pathorurl, localpool);
 				
 				CheckError (svn.client_ls (out hash, pathorurl, ref revision,
-				                           recurse ? 1 : 0, ctx, localpool));
+				                           recurse, ctx, localpool));
 				
 				IntPtr item = apr.hash_first (localpool, hash);
 				while (item != IntPtr.Zero) {
@@ -492,9 +524,7 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 			ArrayList ret = new ArrayList ();
 			
 			StatusCollector collector = new StatusCollector (ret);
-
-			TryStartOperation ();
-			IntPtr localpool = newpool (pool);
+			var localpool = TryStartOperation (null);
 			try {
 				string pathorurl = NormalizePath (path, localpool);
 				CheckError (svn.client_status (IntPtr.Zero, pathorurl, ref revision,
@@ -524,11 +554,10 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 			LibSvnClient.Rev revisionStart = (LibSvnClient.Rev) revStart;
 			LibSvnClient.Rev revisionEnd = (LibSvnClient.Rev) revEnd;
 
-			TryStartOperation ();
-
 			List<SvnRevision> ret = new List<SvnRevision> ();
-			IntPtr localpool = newpool (pool);
 			IntPtr strptr = IntPtr.Zero;
+
+			var localpool = TryStartOperation (null);
 			try {
 				IntPtr array = apr.array_make (localpool, 0, IntPtr.Size);
 				IntPtr first = apr.array_push (array);
@@ -536,9 +565,9 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 				strptr = Marshal.StringToHGlobalAnsi (pathorurl);
 				Marshal.WriteIntPtr (first, strptr);
 				
-				LogCollector collector = new LogCollector ((SubversionRepository)repo, ret);
+				LogCollector collector = new LogCollector ((SubversionRepository)repo, ret, ctx);
 				
-				CheckError (svn.client_log (array, ref revisionStart, ref revisionEnd, 1, 0,
+				CheckError (svn.client_log (array, ref revisionStart, ref revisionEnd, true, false,
 				                            collector.Func,
 				                            IntPtr.Zero, ctx, localpool));
 			} finally {
@@ -558,15 +587,21 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 				
 			LibSvnClient.Rev revisionStart = (LibSvnClient.Rev) revStart;
 			LibSvnClient.Rev revisionEnd = (LibSvnClient.Rev) revEnd;
-			
-			int numAnnotations = File.ReadAllLines (((SubversionRepository)repo).GetPathToBaseText(file)).Length;
-			Annotation[] annotations = new Annotation [numAnnotations];
-			
-			AnnotationCollector collector = new AnnotationCollector (annotations);
-			
-			IntPtr localpool = newpool (pool);
 
-			TryStartOperation ();
+			MemoryStream data = new MemoryStream ();
+			int numAnnotations = 0;
+			Cat (file, SvnRevision.Base, data);
+
+			using (StreamReader reader = new StreamReader (data)) {
+				reader.BaseStream.Seek (0, SeekOrigin.Begin);
+				while (reader.ReadLine () != null)
+					numAnnotations++;
+			}
+
+			Annotation[] annotations = new Annotation [numAnnotations];
+			AnnotationCollector collector = new AnnotationCollector (annotations);
+
+			var localpool = TryStartOperation (null);
 			try {
 				string path = NormalizePath (file.FullPath, localpool);
 				CheckError (svn.client_blame (path, ref revisionStart, ref revisionEnd, collector.Func, IntPtr.Zero, ctx, localpool));
@@ -580,18 +615,34 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 
 		public override string GetTextAtRevision (string pathorurl, Revision revision)
 		{
+			return null;
+		}
+
+		public override string GetTextAtRevision (string pathorurl, Revision revision, string rootPath)
+		{
 			MemoryStream memstream = new MemoryStream ();
-			Cat (pathorurl, (SvnRevision) revision, memstream);
+			try {
+				Cat (pathorurl, (SvnRevision) revision, memstream);
+			} catch (SubversionException e) {
+				// File got added/removed at some point.
+				// SVN_ERR_FS_NOT_FOUND
+				if (e.ErrorCode == 160013)
+					return "";
+				// We tried on a directory
+				// SVN_ERR_FS_NOT_FILE
+				if (e.ErrorCode == 160017)
+					return "";
+				throw;
+			}
 
 			var buffer = memstream.GetBuffer ();
 			try {
 				if (IsBinary (buffer, memstream.Length))
 					return null;
-				return System.Text.Encoding.UTF8.GetString (buffer, 0, (int) memstream.Length);
+				return Encoding.UTF8.GetString (buffer, 0, (int) memstream.Length);
 			} catch {
+				return "";
 			}
-			
-			return System.Text.Encoding.ASCII.GetString (buffer, 0, (int) memstream.Length);
 		}
 		
 		public void Cat (string pathorurl, SvnRevision rev, Stream stream)
@@ -599,17 +650,17 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 			if (pathorurl == null || stream == null)
 				throw new ArgumentNullException ();
 		
-			TryStartOperation ();
 			LibSvnClient.Rev revision = (LibSvnClient.Rev) rev;
 			
-			IntPtr localpool = newpool (pool);
+			var localpool = TryStartOperation (null);
 			try {
 				pathorurl = NormalizePath (pathorurl, localpool);
 				StreamCollector collector = new StreamCollector (stream);
 				IntPtr svnstream = svn.stream_create (IntPtr.Zero, localpool);
 				svn.stream_set_write (svnstream, collector.Func);
-				LibSvnClient.Rev peg_revision = LibSvnClient.Rev.Blank;
-				CheckError (svn.client_cat2 (svnstream, pathorurl, ref peg_revision, ref revision, ctx, localpool), 195007);
+				// Setting peg_revision to revision.
+				// Otherwise, it will use Head as peg and it will throw exceptions.
+				CheckError (svn.client_cat2 (svnstream, pathorurl, ref revision, ref revision, ctx, localpool), 195007);
 			} finally {
 				apr.pool_destroy (localpool);
 				TryEndOperation ();
@@ -620,25 +671,24 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 		{
 			if (path == FilePath.Null || monitor == null)
 				throw new ArgumentNullException();
-			
-			TryStartOperation ();
-			
-			updatemonitor = monitor;
+
 			updateFileList = new ArrayList ();
 			
 			LibSvnClient.Rev rev = LibSvnClient.Rev.Head;
-			IntPtr localpool = newpool (pool);
+			var localpool = TryStartOperation (monitor);
 			try {
 				string pathorurl = NormalizePath (path, localpool);
-				CheckError (svn.client_update (IntPtr.Zero, pathorurl, ref rev, recurse, ctx, localpool));
+				IntPtr result = Marshal.AllocHGlobal (IntPtr.Size);
+				CheckError (svn.client_update (result, pathorurl, ref rev, recurse, ctx, localpool));
+				Marshal.FreeHGlobal (result);
 			} finally {
-				foreach (string file in updateFileList)
-					FileService.NotifyFileChanged (file);
-				updateFileList = null;
-				
 				apr.pool_destroy (localpool);
-				updatemonitor = null;
 				TryEndOperation ();
+
+				foreach (string file in updateFileList)
+					FileService.NotifyFileChanged (file, true);
+
+				updateFileList = null;
 			}
 		}
 
@@ -646,12 +696,8 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 		{
 			if (paths == null || monitor == null)
 				throw new ArgumentNullException();
-			
-			TryStartOperation ();
-			
-			updatemonitor = monitor;
-			IntPtr localpool = newpool (pool);
-			
+
+			var localpool = TryStartOperation (monitor);
 			try {
 				// Put each item into an APR array.
 				IntPtr array = apr.array_make (localpool, 0, IntPtr.Size);
@@ -661,10 +707,9 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 					Marshal.WriteIntPtr (item, apr.pstrdup (localpool, pathorurl));
 				}
 			
-				CheckError (svn.client_revert (array, recurse ? 1 : 0, ctx, localpool));
+				CheckError (svn.client_revert (array, recurse, ctx, localpool));
 			} finally {
 				apr.pool_destroy (localpool);
-				updatemonitor = null;
 				TryEndOperation ();
 			}
 		}
@@ -673,18 +718,13 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 		{
 			if (path == FilePath.Null || monitor == null)
 				throw new ArgumentNullException();
-			
-			TryStartOperation ();
-			
-			updatemonitor = monitor;
-			IntPtr localpool = newpool (pool);
-			
+
+			var localpool = TryStartOperation (monitor);
 			try {
 				string pathorurl = NormalizePath (path, localpool);
-				CheckError (svn.client_resolved (pathorurl, recurse ? 1 : 0, ctx, localpool));
+				CheckError (svn.client_resolved (pathorurl, recurse, ctx, localpool));
 			} finally {
 				apr.pool_destroy (localpool);
-				updatemonitor = null;
 				TryEndOperation ();
 			}
 		}
@@ -694,17 +734,13 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 			if (path == FilePath.Null || monitor == null)
 				throw new ArgumentNullException ();
 
-			TryStartOperation ();
-
 			nb = new notify_baton ();
-			updatemonitor = monitor;
-			IntPtr localpool = newpool (pool);
+			var localpool = TryStartOperation (monitor);
 			try {
 				string pathorurl = NormalizePath (path, localpool);
-				CheckError (svn.client_add3 (pathorurl, (recurse ? 1 : 0), 1, 0, ctx, localpool));
+				CheckError (svn.client_add3 (pathorurl, recurse, true, false, ctx, localpool));
 			} finally {
 				apr.pool_destroy (localpool);
-				updatemonitor = null;
 				TryEndOperation ();
 			}
 		}
@@ -718,18 +754,21 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 				revision = SvnRevision.Head;
 			LibSvnClient.Rev rev = (LibSvnClient.Rev) revision;
 			
-			TryStartOperation ();
 			nb = new notify_baton ();
-			updatemonitor = monitor;
-			IntPtr localpool = newpool (pool);
+			var localpool = TryStartOperation (monitor);
 			try {
 				// Using Uri here because the normalization method doesn't remove the redundant port number when using https
 				url = NormalizePath (new Uri(url).ToString(), localpool);
 				string npath = NormalizePath (path, localpool);
 				CheckError (svn.client_checkout (IntPtr.Zero, url, npath, ref rev, recurse, ctx, localpool));
+			} catch (SubversionException e) {
+				if (e.ErrorCode != 200015)
+					throw;
+
+				if (Directory.Exists (path.ParentDirectory))
+					FileService.DeleteDirectory (path.ParentDirectory);
 			} finally {
 				apr.pool_destroy (localpool);
-				updatemonitor = null;
 				TryEndOperation ();
 			}
 		}
@@ -738,13 +777,9 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 		{
 			if (paths == null || message == null || monitor == null)
 				throw new ArgumentNullException();
-			
-			TryStartOperation ();
-			
+
 			nb = new notify_baton ();
-			updatemonitor = monitor;
-			
-			IntPtr localpool = newpool (pool);
+			var localpool = TryStartOperation (monitor);
 			try {
 				// Put each item into an APR array.
 				IntPtr array = apr.array_make (localpool, 0, IntPtr.Size);
@@ -753,12 +788,11 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 					IntPtr item = apr.array_push (array);
 					Marshal.WriteIntPtr (item, apr.pstrdup (localpool, npath));
 				}
-				
+
 				IntPtr commit_info = IntPtr.Zero;
-				
 				commitmessage = message;
 				
-				CheckError (svn.client_commit (ref commit_info, array, 0, ctx, localpool));
+				CheckError (svn.client_commit (ref commit_info, array, false, ctx, localpool));
 				unsafe {
 					if (commit_info != IntPtr.Zero) {
 						monitor.Log.WriteLine ();
@@ -767,7 +801,6 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 				}
 			} finally {
 				commitmessage = null;
-				updatemonitor = null;
 				apr.pool_destroy (localpool);
 				TryEndOperation ();
 			}
@@ -777,13 +810,9 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 		{
 			if (paths == null || monitor == null)
 				throw new ArgumentNullException ();
-		
-			TryStartOperation ();
 
 			nb = new notify_baton ();
-			updatemonitor = monitor;
-			
-			IntPtr localpool = newpool(pool);
+			var localpool = TryStartOperation (monitor);
 			try {
 				// Put each item into an APR array.
 				IntPtr array = apr.array_make (localpool, paths.Length, IntPtr.Size);
@@ -799,7 +828,6 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 				CheckError (svn.client_mkdir2 (ref commit_info, array, ctx, localpool));
 			} finally {	
 				commitmessage = null;
-				updatemonitor = null;
 				apr.pool_destroy (localpool);
 				TryEndOperation ();
 			}
@@ -809,13 +837,9 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 		{
 			if (path == FilePath.Null || monitor == null)
 				throw new ArgumentNullException ();
-			
-			TryStartOperation ();
-			
+
 			nb = new notify_baton ();
-			updatemonitor = monitor;
-			
-			IntPtr localpool = newpool (pool);
+			var localpool = TryStartOperation (monitor);
 			try {
 				// Put each item into an APR array.
 				IntPtr array = apr.array_make (localpool, 0, IntPtr.Size);
@@ -825,10 +849,9 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 					Marshal.WriteIntPtr (item, apr.pstrdup (localpool, npath));
 				//}
 				IntPtr commit_info = IntPtr.Zero;
-				CheckError (svn.client_delete (ref commit_info, array, (force ? 1 : 0), ctx, localpool));
+				CheckError (svn.client_delete (ref commit_info, array, force, ctx, localpool));
 			} finally {
 				commitmessage = null;
-				updatemonitor = null;
 				apr.pool_destroy (localpool);
 				TryEndOperation ();
 			}
@@ -840,35 +863,27 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 				throw new ArgumentNullException ();
 			
 			LibSvnClient.Rev revision = (LibSvnClient.Rev) rev;
-			
-			TryStartOperation ();
-			
+
 			nb = new notify_baton ();
-			updatemonitor = monitor;
 			IntPtr commit_info = IntPtr.Zero;
-			IntPtr localpool = newpool (pool);
+			var localpool = TryStartOperation (monitor);
 			try {
 				string nsrcPath = NormalizePath (srcPath, localpool);
 				string ndestPath = NormalizePath (destPath, localpool);
 				CheckError (svn.client_move (ref commit_info, nsrcPath, ref revision,
-				                             ndestPath, (force ? 1 : 0), ctx, localpool));
+				                             ndestPath, force, ctx, localpool));
 			} finally {
 				apr.pool_destroy (localpool);
-				updatemonitor = null;
 				TryEndOperation ();
 			}
 		}
 
 		public override void Lock (IProgressMonitor monitor, string comment, bool stealLock, params FilePath[] paths)
 		{
-			TryStartOperation ();
-			
-			IntPtr localpool = newpool (pool);
-			IntPtr array = apr.array_make (localpool, 0, IntPtr.Size);
-			updatemonitor = monitor;
 			nb = new notify_baton ();
-
+			var localpool = TryStartOperation (monitor);
 			try {
+				IntPtr array = apr.array_make (localpool, 0, IntPtr.Size);
 				foreach (string path in paths) {
 					string npath = NormalizePath (path, localpool);
 					IntPtr item = apr.array_push (array);
@@ -877,27 +892,22 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 				lockFileList = new ArrayList ();
 				requiredLockState = LibSvnClient.NotifyLockState.Locked;
 				
-				CheckError (svn.client_lock (array, comment, stealLock ? 1 : 0, ctx, localpool));
+				CheckError (svn.client_lock (array, comment, stealLock, ctx, localpool));
 				if (paths.Length != lockFileList.Count)
 					throw new SubversionException ("Lock operation failed.");
 			} finally {
 				apr.pool_destroy (localpool);
 				lockFileList = null;
-				updatemonitor = null;
 				TryEndOperation ();
 			}
 		}
 		
 		public override void Unlock (IProgressMonitor monitor, bool breakLock, params FilePath[] paths)
 		{
-			TryStartOperation ();
-			
-			IntPtr localpool = newpool (pool);
-			IntPtr array = apr.array_make (localpool, 0, IntPtr.Size);
-			updatemonitor = monitor;
 			nb = new notify_baton ();
-			
+			var localpool = TryStartOperation (monitor);
 			try {
+				IntPtr array = apr.array_make (localpool, 0, IntPtr.Size);
 				foreach (string path in paths) {
 					string npath = NormalizePath (path, localpool);
 					IntPtr item = apr.array_push (array);
@@ -906,22 +916,18 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 				lockFileList = new ArrayList ();
 				requiredLockState = LibSvnClient.NotifyLockState.Unlocked;
 			
-				CheckError (svn.client_unlock (array, breakLock ? 1 : 0, ctx, localpool));
+				CheckError (svn.client_unlock (array, breakLock, ctx, localpool));
 				if (paths.Length != lockFileList.Count)
 					throw new SubversionException ("Lock operation failed.");
 			} finally {
 				apr.pool_destroy (localpool);
 				lockFileList = null;
-				updatemonitor = null;
 				TryEndOperation ();
 			}
 		}
 
 		public override string GetUnifiedDiff (FilePath path1, SvnRevision rev1, FilePath path2, SvnRevision rev2, bool recursive)
 		{
-			TryStartOperation ();
-
-			IntPtr localpool = newpool (pool);
 			IntPtr outfile = IntPtr.Zero;
 			IntPtr errfile = IntPtr.Zero;
 			string fout = null;
@@ -930,6 +936,7 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 			LibSvnClient.Rev revision1 = (LibSvnClient.Rev) rev1;
 			LibSvnClient.Rev revision2 = (LibSvnClient.Rev) rev2;
 			
+			var localpool = TryStartOperation (null);
 			try {
 				IntPtr options = apr.array_make (localpool, 0, IntPtr.Size);
 				
@@ -941,8 +948,8 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 				if (res1 == 0 && res2 == 0) {
 					string npath1 = NormalizePath (path1, localpool);
 					string npath2 = NormalizePath (path2, localpool);
-					CheckError (svn.client_diff (options, npath1, ref revision1, npath2, ref revision2, (recursive ? 1 : 0), 0, 1, outfile, errfile, ctx, localpool));
-					return MonoDevelop.Projects.Text.TextFile.ReadFile (fout).Text;
+					CheckError (svn.client_diff (options, npath1, ref revision1, npath2, ref revision2, recursive, false, true, outfile, errfile, ctx, localpool));
+					return TextFile.ReadFile (fout).Text;
 				} else {
 					throw new Exception ("Could not get diff information");
 				}
@@ -956,7 +963,6 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 			} finally {
 				try {
 					// Cleanup
-					apr.pool_destroy (localpool);
 					if (outfile != IntPtr.Zero)
 						apr.file_close (outfile); 
 					if (errfile != IntPtr.Zero)
@@ -965,9 +971,11 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 						FileService.DeleteFile (ferr);
 					if (fout != null)
 						FileService.DeleteFile (fout);
-
+				} catch {
+				} finally {
+					apr.pool_destroy (localpool);
 					TryEndOperation ();
-				} catch {}
+				}
 			}
 		}
 
@@ -984,9 +992,7 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 		
 		private void Merge (string path, LibSvnClient.Rev revision1, LibSvnClient.Rev revision2)
 		{
-			TryStartOperation ();
-
-			IntPtr localpool = newpool (pool);
+			var localpool = TryStartOperation (null);
 			try {
 				path = NormalizePath (path, localpool);
 				LibSvnClient.Rev working = LibSvnClient.Rev.Working;
@@ -1004,6 +1010,101 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 				TryEndOperation ();
 			}
 		}
+
+		public override void Ignore (FilePath[] paths)
+		{
+			IntPtr hash_item, hash_name, hash_val;
+			int length;
+			IntPtr result;
+			IntPtr props_ptr = IntPtr.Zero;
+			StringBuilder props = new StringBuilder ();
+			string new_path;
+			LibSvnClient.svn_string_t new_props;
+			LibSvnClient.Rev rev = LibSvnClient.Rev.Working;
+
+			var localpool = TryStartOperation (null);
+			try {
+				foreach (var path in paths) {
+					new_path = NormalizePath (path, localpool);
+					CheckError (svn.client_propget (out result, "svn:ignore", Path.GetDirectoryName (new_path),
+					                                ref rev, false, ctx, localpool));
+					hash_item = apr.hash_first (localpool, result);
+					while (hash_item != IntPtr.Zero) {
+						apr.hash_this (hash_item, out hash_name, out length, out hash_val);
+						new_props = (LibSvnClient.svn_string_t) Marshal.PtrToStructure (hash_val, typeof (LibSvnClient.svn_string_t));
+						props.Append (Marshal.PtrToStringAnsi (new_props.data));
+						hash_item = apr.hash_next (hash_item);
+					}
+					props.AppendLine (Path.GetFileName (new_path));
+					new_props = new LibSvnClient.svn_string_t ();
+					new_props.data = Marshal.StringToHGlobalAnsi (props.ToString ());
+					new_props.len = props.Length;
+					props_ptr = apr.pcalloc (localpool, new_props);
+					CheckError (svn.client_propset ("svn:ignore", props_ptr, Path.GetDirectoryName (new_path), false, localpool));
+				}
+			} finally {
+				apr.pool_destroy (localpool);
+				TryEndOperation ();
+			}
+		}
+
+		public override void Unignore (FilePath[] paths)
+		{
+			IntPtr hash_item, hash_name, hash_val;
+			int length;
+			IntPtr result;
+			IntPtr props_ptr = IntPtr.Zero;
+			StringBuilder props = new StringBuilder ();
+			string new_path;
+			LibSvnClient.svn_string_t new_props;
+			LibSvnClient.Rev rev = LibSvnClient.Rev.Working;
+			int index;
+			string props_str;
+
+			var localpool = TryStartOperation (null);
+			try {
+				foreach (var path in paths) {
+					new_path = NormalizePath (path, localpool);
+					CheckError (svn.client_propget (out result, "svn:ignore", Path.GetDirectoryName (new_path),
+					                                ref rev, false, ctx, localpool));
+					hash_item = apr.hash_first (localpool, result);
+					while (hash_item != IntPtr.Zero) {
+						apr.hash_this (hash_item, out hash_name, out length, out hash_val);
+						new_props = (LibSvnClient.svn_string_t) Marshal.PtrToStructure (hash_val, typeof (LibSvnClient.svn_string_t));
+						props.Append (Marshal.PtrToStringAnsi (new_props.data));
+						hash_item = apr.hash_next (hash_item);
+					}
+					props_str = props.ToString ();
+					index = props_str.IndexOf (Path.GetFileName (new_path) + Environment.NewLine, StringComparison.Ordinal);
+					props_str = (index < 0) ? props_str : props_str.Remove (index, Path.GetFileName(new_path).Length+1);
+
+					new_props = new LibSvnClient.svn_string_t ();
+					new_props.data = Marshal.StringToHGlobalAnsi (props_str);
+					new_props.len = props_str.Length;
+					props_ptr = apr.pcalloc (localpool, new_props);
+					CheckError (svn.client_propset ("svn:ignore", props_ptr, Path.GetDirectoryName (new_path), false, localpool));
+				}
+			} finally {
+				apr.pool_destroy (localpool);
+				TryEndOperation ();
+			}
+		}
+
+		public override string GetTextBase (string sourcefile)
+		{
+			MemoryStream data = new MemoryStream ();
+			try {
+				Cat (sourcefile, SvnRevision.Base, data);
+				return TextFile.ReadFile (sourcefile, data).Text;
+				// This outputs the contents of the base revision
+				// of a file to a stream.
+			} catch (SubversionException e) {
+				// This occurs when we don't have a base file for
+				// the target file. We have no way of knowing if
+				// a file has a base version therefore this will do.
+				return String.Empty;
+			}
+		}
 		
 		IntPtr svn_client_get_commit_log_impl (ref IntPtr log_msg, ref IntPtr tmp_file,
 		                                       IntPtr commit_items, IntPtr baton, IntPtr pool)
@@ -1013,15 +1114,15 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 			return IntPtr.Zero;
 		}
 
-		void TryStartOperation ()
+		IntPtr TryStartOperation (IProgressMonitor monitor)
 		{
 			lock (sync) {
-				Console.WriteLine ("*************************************");
-				Console.WriteLine (Environment.StackTrace);
-				Console.WriteLine ("*************************************");
 				if (inProgress)
 					throw new SubversionException ("Another Subversion operation is already in progress.");
 				inProgress = true;
+				updatemonitor = monitor;
+				progressData = new ProgressData ();
+				return newpool (pool);
 			}
 		}
 
@@ -1031,10 +1132,11 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 				if (!inProgress)
 					throw new SubversionException ("No Subversion operation is in progress.");
 				inProgress = false;
+				updatemonitor = null;
 			}
 		}
 
-		private VersionInfo CreateNode (LibSvnClient.StatusEnt ent, Repository repo) 
+		static VersionInfo CreateNode (LibSvnClient.StatusEnt ent, Repository repo) 
 		{
 			VersionStatus rs = VersionStatus.Unversioned;
 			Revision rr = null;
@@ -1064,7 +1166,7 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 			return ret;
 		}
 		
-		private VersionStatus ConvertStatus (LibSvnClient.NodeSchedule schedule, LibSvnClient.svn_wc_status_kind status) {
+		static VersionStatus ConvertStatus (LibSvnClient.NodeSchedule schedule, LibSvnClient.svn_wc_status_kind status) {
 			switch (schedule) {
 				case LibSvnClient.NodeSchedule.Add: return VersionStatus.Versioned | VersionStatus.ScheduledAdd;
 				case LibSvnClient.NodeSchedule.Delete: return VersionStatus.Versioned | VersionStatus.ScheduledDelete;
@@ -1093,9 +1195,58 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 		{
 			if (string.IsNullOrEmpty (mimeType))
 				return false;
-			return !(mimeType.StartsWith ("text/") || 
+			return !(mimeType.StartsWith ("text/", StringComparison.Ordinal) || 
 			         mimeType == "image/x-xbitmap" || 
 			         mimeType == "image/x-xpixmap");
+		}
+
+		IntPtr svn_cancel_func_t_impl (IntPtr baton)
+		{
+			if (updatemonitor == null || !updatemonitor.IsCancelRequested)
+				return IntPtr.Zero;
+
+			LibSvnClient.svn_error_t err = new LibSvnClient.svn_error_t ();
+			err.apr_err = 200015;
+			err.message = "The operation was interrupted";
+
+			IntPtr localpool = newpool (IntPtr.Zero);
+			err.pool = localpool;
+			return apr.pcalloc (localpool, err);
+		}
+
+		class ProgressData
+		{
+			public int Bytes;
+			public Timer LogTimer = new Timer ();
+			public int Seconds;
+		}
+
+		ProgressData progressData;
+		void svn_ra_progress_notify_func_t_impl (off_t progress, off_t total, IntPtr baton, IntPtr pool)
+		{
+			if (updatemonitor == null)
+				return;
+
+			int currentProgress = (int)progress;
+			if (currentProgress == 0)
+				return;
+
+			int totalProgress = (int)total;
+			if (totalProgress != -1 && currentProgress >= totalProgress) {
+				progressData.LogTimer.Close ();
+				return;
+			}
+
+			progressData.Bytes = currentProgress;
+			if (progressData.LogTimer.Enabled)
+				return;
+
+			progressData.LogTimer.Interval = 1000;
+			progressData.LogTimer.Elapsed += delegate (object sender, ElapsedEventArgs eea) {
+				progressData.Seconds += 1;
+				updatemonitor.Log.WriteLine ("{0} bytes in {1} seconds", progressData.Bytes, progressData.Seconds);
+			};
+			progressData.LogTimer.Start ();
 		}
 		
 		struct notify_baton {
@@ -1278,6 +1429,39 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 			if (lockFileList != null && data.lock_state == requiredLockState)
 				lockFileList.Add (file);
 		}
+
+		internal string GetDirectoryDotSvnInternal (FilePath path, out bool pre_1_7)
+		{
+			pre_1_7 = this.pre_1_7;
+			if (pre_1_7)
+				return "";
+
+			IntPtr result;
+			IntPtr scratch = newpool (pool);
+			var localpool = TryStartOperation (null);
+			try {
+				string new_path = NormalizePath (path.FullPath, localpool);
+				try {
+					CheckError (svn.client_get_wc_root (out result, new_path, ctx, localpool, scratch));
+				} catch (SubversionException e) {
+					// We are not in a working copy.
+					switch (e.ErrorCode) {
+					// SVN_ERR_WC_NOT_DIRECTORY
+					case 155007:
+					// SVN_ERR_WC_NOT_FILE
+					case 155008:
+						return "";
+					}
+
+					throw;
+				}
+				return Marshal.PtrToStringAnsi (result);
+			} finally {
+				apr.pool_destroy (localpool);
+				apr.pool_destroy (scratch);
+				TryEndOperation ();
+			}
+		}
 		
 		public class StatusCollector {
 			ArrayList statuses;
@@ -1309,14 +1493,16 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 			
 			List<SvnRevision> logs;
 			SubversionRepository repo;
+			IntPtr ctx;
 
 			public LibSvnClient.svn_log_message_receiver_t Func {
 				get; private set;
 			}
 
-			public LogCollector (SubversionRepository repo, List<SvnRevision> logs) {
+			public LogCollector (SubversionRepository repo, List<SvnRevision> logs, IntPtr ctx) {
 				this.repo = repo;
 				this.logs = logs;
+				this.ctx = ctx;
 				Func = CollectorFunc;
 			}
 
@@ -1353,7 +1539,8 @@ namespace MonoDevelop.VersionControl.Subversion.Unix
 					}
 					
 					IntPtr result = IntPtr.Zero;
-					SvnClient.CheckError (svn.client_root_url_from_path (ref result, repo.RootPath, IntPtr.Zero, pool));
+
+					SvnClient.CheckError (svn.client_root_url_from_path (ref result, repo.RootPath, ctx, pool));
 					if (result == IntPtr.Zero) // Should never happen
 						items.Add (new RevisionPath (name, ac, ""));
 					else

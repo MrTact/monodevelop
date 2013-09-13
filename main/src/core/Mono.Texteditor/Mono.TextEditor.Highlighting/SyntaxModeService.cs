@@ -257,13 +257,13 @@ namespace Mono.TextEditor.Highlighting
 			{
 				return !span.StopAtEol || span.StopAtEol && !string.IsNullOrEmpty (span.Continuation) &&
 					line != null && doc.GetTextAt (line).Trim ().EndsWith (span.Continuation, StringComparison.Ordinal);
-			}
+			} 
 			
 			public void InnerRun ()
 			{
 				bool doUpdate = false;
 				int startLine = doc.OffsetToLineNumber (startOffset);
-				if (startLine < 0)
+				if (startLine < 0 || mode.Document == null)
 					return;
 				try {
 					var lineSegment = doc.GetLine (startLine);
@@ -378,10 +378,16 @@ namespace Mono.TextEditor.Highlighting
 		
 		static string Scan (Stream stream, string attribute)
 		{
-			var reader = XmlReader.Create (stream);
-			while (reader.Read () && !reader.IsStartElement ()) 
-				;
-			return reader.GetAttribute (attribute);
+			try {
+				var reader = XmlReader.Create (stream);
+				while (reader.Read () && !reader.IsStartElement ()) 
+					;
+				return reader.GetAttribute (attribute);
+			} catch (Exception e) {
+				Console.WriteLine ("Error while scanning xml:");
+				Console.WriteLine (e);
+				return null;
+			}
 		}
 
 		public static List<ValidationEventArgs> ValidateStyleFile (string fileName)
@@ -419,8 +425,12 @@ namespace Mono.TextEditor.Highlighting
 				} else if (file.EndsWith (".json", StringComparison.Ordinal)) {
 					using (var stream = File.OpenRead (file)) {
 						string styleName = ScanStyle (stream);
-						styleLookup [styleName] = new UrlStreamProvider (file);
-						isLoadedFromFile [styleName] = file;
+						if (!string.IsNullOrEmpty (styleName)) {
+							styleLookup [styleName] = new UrlStreamProvider (file);
+							isLoadedFromFile [styleName] = file;
+						} else {
+							Console.WriteLine ("Invalid .json syntax sheme file : " + file);
+						}
 					}
 				} else if (file.EndsWith (".vssettings", StringComparison.Ordinal)) {
 					using (var stream = File.OpenRead (file)) {
@@ -455,13 +465,19 @@ namespace Mono.TextEditor.Highlighting
 
 		static string ScanStyle (Stream stream)
 		{
-			var file = new StreamReader (stream);
-			file.ReadLine ();
-			var nameLine = file.ReadLine ();
-			var match = nameRegex.Match (nameLine);
-			if (!match.Success)
+			try {
+				var file = new StreamReader (stream);
+				file.ReadLine ();
+				var nameLine = file.ReadLine ();
+				var match = nameRegex.Match (nameLine);
+				if (!match.Success)
+					return null;
+				return match.Groups[1].Value;
+			} catch (Exception e) {
+				Console.WriteLine ("Error while scanning json:");
+				Console.WriteLine (e);
 				return null;
-			return match.Groups[1].Value;
+			}
 		}
 
 		public static void AddSyntaxMode (IStreamProvider provider)
@@ -531,3 +547,4 @@ namespace Mono.TextEditor.Highlighting
 		}
 	}
 }
+

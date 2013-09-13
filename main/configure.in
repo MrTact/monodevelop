@@ -1,4 +1,4 @@
-AC_INIT([monodevelop], 4.0.6, [monodevelop-list@lists.ximian.com])
+AC_INIT([monodevelop], 4.1.7, [monodevelop-list@lists.ximian.com])
 AC_PREREQ(2.53)
 AM_INIT_AUTOMAKE([1.10 tar-ustar])
 AM_MAINTAINER_MODE
@@ -6,13 +6,15 @@ AM_MAINTAINER_MODE
 #capture aclocal flags for autoreconf
 AC_SUBST(ACLOCAL_FLAGS)
 
-ASSEMBLY_VERSION=4.0.0.0
+ASSEMBLY_VERSION=4.1.7.0
 
 # This is parsed in BuildVariables.cs. Keep the format consistent to avoid breaking
 # the C# side of things. It should be one of the following two formats:
 # 1) "VERSION_NUMBER"					"2.0"
 # 2) "VERSION_NUMBER BUILD_TYPE BUILD_NUMBER"		"2.0 Alpha 1"
-PACKAGE_VERSION_LABEL="4.0.6"
+PACKAGE_VERSION_LABEL="4.1.7"
+
+COMPAT_ADDIN_VERSION=4.0
 
 AC_PATH_PROG(MONO, mono)
 AC_PATH_PROG(MCS, gmcs)
@@ -27,15 +29,7 @@ fi
 
 AC_PATH_PROG(PKG_CONFIG, pkg-config, no)
 
-# On OSX use Mono's private copy of pkg-config if it exists
-OSX_PKG_CONFIG=/Library/Frameworks/Mono.framework/Versions/Current/bin/pkg-config
-if test -e $OSX_PKG_CONFIG; then
-	PKG_CONFIG=$OSX_PKG_CONFIG
-elif test "x$PKG_CONFIG" = "xno"; then
-	AC_MSG_ERROR([You need to install pkg-config])
-fi
-
-MONO_REQUIRED_VERSION=2.10.9
+MONO_REQUIRED_VERSION=3.0.4
 
 if ! $PKG_CONFIG --atleast-version=$MONO_REQUIRED_VERSION mono; then
 	AC_MSG_ERROR([You need mono $MONO_REQUIRED_VERSION or newer])
@@ -254,6 +248,7 @@ AC_SUBST(LIB_SUFFIX)
 AC_SUBST(LIB_PREFIX)
 AC_SUBST(ASSEMBLY_VERSION)
 AC_SUBST(PACKAGE_VERSION_LABEL)
+AC_SUBST(COMPAT_ADDIN_VERSION)
 AC_SUBST(SQLITE_XML)
 AC_SUBST(CSC_FLAGS)
 
@@ -276,17 +271,15 @@ AC_OUTPUT([
 build/Makefile
 build/MacOSX/Makefile
 contrib/Makefile
-contrib/Mono.Debugger.Soft/Makefile
 contrib/ICSharpCode.Decompiler/Makefile
 external/Makefile
 src/Makefile
 src/core/Makefile
 src/core/Mono.Texteditor/Makefile
-src/core/Mono.Debugging/Makefile
 src/core/MonoDevelop.Core/Makefile
+src/core/MonoDevelop.Core/BuildVariables.cs
 src/core/MonoDevelop.Projects.Formats.MSBuild/Makefile
 src/core/MonoDevelop.Ide/Makefile
-src/core/MonoDevelop.Ide/BuildVariables.cs
 src/core/MonoDevelop.Startup/Makefile
 src/tools/Makefile
 src/tools/mdhost/Makefile
@@ -301,7 +294,9 @@ src/addins/NUnit/NUnitRunner/Makefile
 src/addins/VersionControl/MonoDevelop.VersionControl/Makefile
 src/addins/VersionControl/MonoDevelop.VersionControl.Subversion/Makefile
 src/addins/VersionControl/MonoDevelop.VersionControl.Subversion.Unix/Makefile
+src/addins/VersionControl/MonoDevelop.VersionControl.Subversion.Tests/Makefile
 src/addins/VersionControl/MonoDevelop.VersionControl.Git/Makefile
+src/addins/VersionControl/MonoDevelop.VersionControl.Git.Tests/Makefile
 src/addins/VersionControl/Makefile
 src/addins/CSharpBinding/Makefile
 src/addins/CSharpBinding/Autotools/Makefile
@@ -339,7 +334,6 @@ src/addins/MonoDevelop.XmlEditor/Makefile
 src/addins/MonoDevelop.Refactoring/Makefile
 src/addins/MonoDevelop.Debugger/Makefile
 src/addins/MonoDevelop.Debugger.Soft/Makefile
-src/addins/MonoDevelop.Debugger.Soft/Mono.Debugging.Soft/Makefile
 src/addins/MonoDevelop.Debugger.Soft/MonoDevelop.Debugger.Soft/Makefile
 src/addins/MonoDevelop.Debugger.Soft/MonoDevelop.Debugger.Soft.AspNet/Makefile
 src/addins/MonoDevelop.HexEditor/Makefile

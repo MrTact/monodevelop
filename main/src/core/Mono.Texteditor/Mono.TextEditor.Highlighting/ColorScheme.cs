@@ -107,8 +107,11 @@ namespace Mono.TextEditor.Highlighting
 		[ColorDescription("Brace Matching(Rectangle)", VSSetting="color=Brace Matching (Rectangle)/Background,secondcolor=Brace Matching (Rectangle)/Foreground")]
 		public AmbientColor BraceMatchingRectangle { get; private set; }
 		
-		[ColorDescription("Usages(Rectangle)", VSSetting="color=MarkerFormatDefinition/HighlightedReference/Background,secondcolor=MarkerFormatDefinition/HighlightedReference/Background")]
+		[ColorDescription("Usages(Rectangle)", VSSetting="color=MarkerFormatDefinition/HighlightedReference/Background,secondcolor=MarkerFormatDefinition/HighlightedReference/Background,bordercolor=MarkerFormatDefinition/HighlightedReference/Background")]
 		public AmbientColor UsagesRectangle { get; private set; }
+
+		[ColorDescription("Changing usages(Rectangle)", VSSetting="color=MarkerFormatDefinition/HighlightedReference/Background,secondcolor=MarkerFormatDefinition/HighlightedReference/Background,bordercolor=MarkerFormatDefinition/HighlightedReference/Background")]
+		public AmbientColor ChangingUsagesRectangle { get; private set; }
 
 		[ColorDescription("Breakpoint Marker")]
 		public AmbientColor BreakpointMarker { get; private set; }
@@ -158,26 +161,38 @@ namespace Mono.TextEditor.Highlighting
 		[ColorDescription("Message Bubble Error Marker")]
 		public AmbientColor MessageBubbleErrorMarker { get; private set; }
 
-		[ColorDescription("Message Bubble Error Tag Text")]
-		public AmbientColor MessageBubbleErrorTagText { get; private set; }
-
 		[ColorDescription("Message Bubble Error Tag")]
 		public AmbientColor MessageBubbleErrorTag { get; private set; }
+
+		[ColorDescription("Message Bubble Error Tooltip")]
+		public AmbientColor MessageBubbleErrorTooltip { get; private set; }
 
 		[ColorDescription("Message Bubble Error Line")]
 		public AmbientColor MessageBubbleErrorLine { get; private set; }
 
+		[ColorDescription("Message Bubble Error Counter")]
+		public AmbientColor MessageBubbleErrorCounter { get; private set; }
+
+		[ColorDescription("Message Bubble Error IconMargin")]
+		public AmbientColor MessageBubbleErrorIconMargin { get; private set; }
+
 		[ColorDescription("Message Bubble Warning Marker")]
 		public AmbientColor MessageBubbleWarningMarker { get; private set; }
-
-		[ColorDescription("Message Bubble Warning Tag Text")]
-		public AmbientColor MessageBubbleWarningTagText { get; private set; }
 
 		[ColorDescription("Message Bubble Warning Tag")]
 		public AmbientColor MessageBubbleWarningTag { get; private set; }
 
+		[ColorDescription("Message Bubble Warning Tooltip")]
+		public AmbientColor MessageBubbleWarningTooltip { get; private set; }
+
 		[ColorDescription("Message Bubble Warning Line")]
 		public AmbientColor MessageBubbleWarningLine { get; private set; }
+
+		[ColorDescription("Message Bubble Warning Counter")]
+		public AmbientColor MessageBubbleWarningCounter { get; private set; }
+
+		[ColorDescription("Message Bubble Warning IconMargin")]
+		public AmbientColor MessageBubbleWarningIconMargin { get; private set; }
 		#endregion
 
 		#region Text Colors
@@ -235,6 +250,9 @@ namespace Mono.TextEditor.Highlighting
 
 		[ColorDescription("Preprocessor", VSSetting = "Preprocessor Keyword")]
 		public ChunkStyle Preprocessor { get; private set; }
+
+		[ColorDescription("Preprocessor(Region Name)", VSSetting = "Plain Text")]
+		public ChunkStyle PreprocessorRegionName { get; private set; }
 
 		[ColorDescription("Xml Text", VSSetting = "XML Text")]
 		public ChunkStyle XmlText { get; private set; }
@@ -379,6 +397,9 @@ namespace Mono.TextEditor.Highlighting
 
 		[ColorDescription("Syntax Error", VSSetting = "Syntax Error")]
 		public ChunkStyle SyntaxError { get; private set; }
+
+		[ColorDescription("String Format Items", VSSetting = "String")]
+		public ChunkStyle StringFormatItems { get; private set; }
 
 		[ColorDescription("Breakpoint Text", VSSetting = "Breakpoint (Enabled)")]
 		public ChunkStyle BreakpointText { get; private set; }

@@ -33,6 +33,7 @@ using Gtk;
 using MonoDevelop.Components.Commands;
 using MonoDevelop.Ide.Gui;
 using MonoDevelop.Ide.Navigation;
+using MonoDevelop.Core;
 
 namespace MonoDevelop.Ide.Commands
 {
@@ -41,7 +42,7 @@ namespace MonoDevelop.Ide.Commands
 		CloseAllButThis,
 		CopyPathName,
 		ToggleMaximize,
-		ReopenClosedTab
+		ReopenClosedTab,
 	}
 	
 	class CloseAllButThisHandler : CommandHandler
@@ -67,11 +68,13 @@ namespace MonoDevelop.Ide.Commands
 			Document document = IdeApp.Workbench.ActiveDocument;
 			if (document == null)
 				return;
-			
+			var fileName = document.FileName;
+			if (fileName == null)
+				return;
 			Clipboard clipboard = Clipboard.Get (Gdk.Atom.Intern ("CLIPBOARD", false));
-			clipboard.Text = document.FileName;
+			clipboard.Text = fileName;
 			clipboard = Clipboard.Get (Gdk.Atom.Intern ("PRIMARY", false));
-			clipboard.Text = document.FileName;
+			clipboard.Text = fileName;
 		}
 	}
 

@@ -75,7 +75,7 @@ namespace MonoDevelop.Projects
 			get { return subtype; }
 			set {
 				subtype = value;
-				OnChanged ();
+				OnChanged ("Subtype");
 			}
 		}
 
@@ -85,7 +85,7 @@ namespace MonoDevelop.Projects
 			get { return data; }
 			set {
 				data = value;
-				OnChanged ();
+				OnChanged ("Data");
 			}
 		}
 
@@ -96,7 +96,9 @@ namespace MonoDevelop.Projects
 			set {
 				Debug.Assert (!String.IsNullOrEmpty (value));
 
-				FilePath oldFileName = filename;
+				FilePath oldVirtualPath = ProjectVirtualPath;
+				FilePath oldPath = filename;
+
 				filename = FileService.GetFullPath (value);
 
 				if (HasChildren) {
@@ -104,8 +106,14 @@ namespace MonoDevelop.Projects
 						projectFile.dependsOn = Path.GetFileName (FilePath);
 				}
 
+				// If the file is a link, rename the link too
+				if (IsLink && Link.FileName == oldPath.FileName)
+					link = Path.Combine (Path.GetDirectoryName (link), filename.FileName);
+
+				OnPathChanged (oldPath, filename, oldVirtualPath, ProjectVirtualPath);
+
 				if (project != null)
-					project.NotifyFileRenamedInProject (new ProjectFileRenamedEventArgs (project, this, oldFileName));
+					project.NotifyFileRenamedInProject (new ProjectFileRenamedEventArgs (project, this, oldPath));
 			}
 		}
 
@@ -116,7 +124,7 @@ namespace MonoDevelop.Projects
 			get { return buildaction; }
 			set {
 				buildaction = string.IsNullOrEmpty (value) ? MonoDevelop.Projects.BuildAction.None : value;
-				OnChanged ();
+				OnChanged ("BuildAction");
 			}
 		}
 
@@ -177,7 +185,7 @@ namespace MonoDevelop.Projects
 			get { return contentType; }
 			set {
 				contentType = value;
-				OnChanged ();
+				OnChanged ("ContentType");
 			}
 		}
 
@@ -192,7 +200,7 @@ namespace MonoDevelop.Projects
 			set {
 				if (visible != value) {
 					visible = value;
-					OnChanged ();
+					OnChanged ("Visible");
 				}
 			}
 		}
@@ -208,7 +216,7 @@ namespace MonoDevelop.Projects
 			set {
 				if (generator != value) {
 					generator = value;
-					OnChanged ();
+					OnChanged ("Generator");
 				}
 			}
 		}
@@ -224,7 +232,7 @@ namespace MonoDevelop.Projects
 			set {
 				if (customToolNamespace != value) {
 					customToolNamespace = value;
-					OnChanged ();
+					OnChanged ("CustomToolNamespace");
 				}
 			}
 		}
@@ -241,7 +249,7 @@ namespace MonoDevelop.Projects
 			set {
 				if (lastGenOutput != value) {
 					lastGenOutput = value;
-					OnChanged ();
+					OnChanged ("LastGenOutput");
 				}
 			}
 		}
@@ -260,8 +268,12 @@ namespace MonoDevelop.Projects
 				if (link != value) {
 					if (value.IsAbsolute || value.ToString ().StartsWith ("..", StringComparison.Ordinal))
 						throw new ArgumentException ("value");
+
+					var oldLink = link;
 					link = value;
-					OnChanged ();
+
+					OnVirtualPathChanged (oldLink, link);
+					OnChanged ("Link");
 				}
 			}
 		}
@@ -291,7 +303,7 @@ namespace MonoDevelop.Projects
 			set {
 				if (copyToOutputDirectory != value) {
 					copyToOutputDirectory = value;
-					OnChanged ();
+					OnChanged ("CopyToOutputDirectory");
 				}
 			}
 		}
@@ -316,7 +328,7 @@ namespace MonoDevelop.Projects
 					if (project != null && value != null)
 						project.UpdateDependency (this, oldPath);
 	
-					OnChanged ();
+					OnChanged ("DependsOn");
 				}
 			}
 		}
@@ -395,13 +407,16 @@ namespace MonoDevelop.Projects
 			}
 			set {
 				resourceId = value;
-				OnChanged ();
+				OnChanged ("ResourceId");
 			}
 		}
 
 		internal void SetProject (Project project)
 		{
 			this.project = project;
+
+			if (project != null)
+				OnVirtualPathChanged (FilePath.Null, ProjectVirtualPath);
 		}
 
 		public override string ToString ()
@@ -415,6 +430,8 @@ namespace MonoDevelop.Projects
 			pf.dependsOnFile = null;
 			pf.dependentChildren = null;
 			pf.project = null;
+			pf.VirtualPathChanged = null;
+			pf.PathChanged = null;
 			return pf;
 		}
 
@@ -422,10 +439,62 @@ namespace MonoDevelop.Projects
 		{
 		}
 
-		protected virtual void OnChanged ()
+		internal event EventHandler<ProjectFileVirtualPathChangedEventArgs> VirtualPathChanged;
+
+		void OnVirtualPathChanged (FilePath oldVirtualPath, FilePath newVirtualPath)
+		{
+			var handler = VirtualPathChanged;
+
+			if (handler != null)
+				handler (this, new ProjectFileVirtualPathChangedEventArgs (this, oldVirtualPath, newVirtualPath));
+		}
+
+		internal event EventHandler<ProjectFilePathChangedEventArgs> PathChanged;
+
+		void OnPathChanged (FilePath oldPath, FilePath newPath, FilePath oldVirtualPath, FilePath newVirtualPath)
+		{
+			var handler = PathChanged;
+
+			if (handler != null)
+				handler (this, new ProjectFilePathChangedEventArgs (this, oldPath, newPath, oldVirtualPath, newVirtualPath));
+		}
+
+		protected virtual void OnChanged (string property)
 		{
 			if (project != null)
-				project.NotifyFilePropertyChangedInProject (this);
+				project.NotifyFilePropertyChangedInProject (this, property);
 		}
+
+		[Obsolete ("Use OnChanged(string property) instead.")]
+		protected virtual void OnChanged ()
+		{
+			OnChanged (null);
+		}
+	}
+
+	internal class ProjectFileVirtualPathChangedEventArgs : EventArgs
+	{
+		public ProjectFileVirtualPathChangedEventArgs (ProjectFile projectFile, FilePath oldPath, FilePath newPath)
+		{
+			ProjectFile = projectFile;
+			OldVirtualPath = oldPath;
+			NewVirtualPath = newPath;
+		}
+
+		public ProjectFile ProjectFile { get; private set; }
+		public FilePath OldVirtualPath { get; private set; }
+		public FilePath NewVirtualPath { get; private set; }
+	}
+
+	internal class ProjectFilePathChangedEventArgs : ProjectFileVirtualPathChangedEventArgs
+	{
+		public ProjectFilePathChangedEventArgs (ProjectFile projectFile, FilePath oldPath, FilePath newPath, FilePath oldVirtualPath, FilePath newVirtualPath) : base (projectFile, oldVirtualPath, newVirtualPath)
+		{
+			OldPath = oldPath;
+			NewPath = newPath;
+		}
+
+		public FilePath OldPath { get; private set; }
+		public FilePath NewPath { get; private set; }
 	}
 }

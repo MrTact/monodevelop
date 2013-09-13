@@ -35,6 +35,7 @@ using Mono.TextEditor;
 using Mono.TextEditor.Highlighting;
 using MonoDevelop.Components;
 using MonoDevelop.Ide.Fonts;
+using MonoDevelop.Ide.Gui.Content;
 
 namespace MonoDevelop.Ide.CodeCompletion
 {
@@ -321,12 +322,13 @@ namespace MonoDevelop.Ide.CodeCompletion
 		{
 			int newIndex = GetIndex (false, SelectedItem) + relative;
 			newIndex = Math.Min (filteredItems.Count - 1, Math.Max (0, newIndex));
+
 			int newSelection = GetItem (false, newIndex);
 			if (newSelection < 0)
 				return;
 
 			if (SelectedItem == newSelection && relative < 0) {
-				SelectedItem = 0;
+				SelectedItem = GetItem (false, 0);
 			} else {
 				SelectedItem = newSelection;
 			}
@@ -422,7 +424,7 @@ namespace MonoDevelop.Ide.CodeCompletion
 				int width = alloc.Width;
 				int height = alloc.Height;
 				context.Rectangle (args.Area.X, args.Area.Y, args.Area.Width, args.Area.Height);
-				context.Color = this.backgroundColor;
+				context.SetSourceColor (backgroundColor);
 				context.Fill ();
 
 				int xpos = iconTextSpacing;
@@ -431,12 +433,12 @@ namespace MonoDevelop.Ide.CodeCompletion
 				//when there are no matches, display a message to indicate that the completion list is still handling input
 				if (filteredItems.Count == 0) {
 					context.Rectangle (0, yPos, width, height - yPos);
-					context.Color = backgroundColor;
+					context.SetSourceColor (backgroundColor);
 					context.Stroke ();
 					noMatchLayout.SetText (win.DataProvider.ItemCount == 0 ? NoSuggestionsMsg : NoMatchesMsg);
 					int lWidth, lHeight;
 					noMatchLayout.GetPixelSize (out lWidth, out lHeight);
-					context.Color = textColor;
+					context.SetSourceColor (textColor);
 					context.MoveTo ((width - lWidth) / 2, yPos + (height - lHeight - yPos) / 2 - lHeight);
 					PangoCairoHelper.ShowLayout (context, noMatchLayout);
 					return false;
@@ -458,7 +460,7 @@ namespace MonoDevelop.Ide.CodeCompletion
 						x = icon.Width + 4;
 					}
 					context.Rectangle (0, ypos, Allocation.Width, rowHeight);
-					context.Color = backgroundColor;
+					context.SetSourceColor (backgroundColor);
 					context.Fill ();
 
 
@@ -469,7 +471,7 @@ namespace MonoDevelop.Ide.CodeCompletion
 					int px, py;
 					categoryLayout.GetPixelSize (out px, out py);
 					context.MoveTo (x, ypos + (rowHeight - py) / 2);
-					context.Color = textColor;
+					context.SetSourceColor (textColor);
 					PangoCairoHelper.ShowLayout (context, categoryLayout);
 				}, delegate (Category curCategory, int item, int itemidx, int ypos) {
 					if (ypos >= height)
@@ -483,16 +485,12 @@ namespace MonoDevelop.Ide.CodeCompletion
 						xpos = iconTextSpacing;
 					}
 					string markup = win.DataProvider.HasMarkup (item) ? (win.DataProvider.GetMarkup (item) ?? "&lt;null&gt;") : GLib.Markup.EscapeText (win.DataProvider.GetText (item) ?? "<null>");
-					string description = win.DataProvider.GetDescription (item);
+					string description = win.DataProvider.GetDescription (item, item == SelectedItem);
 					
 					if (string.IsNullOrEmpty (description)) {
 						layout.SetMarkup (markup);
 					} else {
-						if (item == SelectedItem) {
-							layout.SetMarkup (markup + " " + description);
-						} else {
-							layout.SetMarkup (markup + " <span foreground=\"darkgray\">" + description + "</span>");
-						}
+						layout.SetMarkup (markup + " " + description);
 					}
 				
 					string text = win.DataProvider.GetText (item);
@@ -529,16 +527,16 @@ namespace MonoDevelop.Ide.CodeCompletion
 					iypos = iconHeight < rowHeight ? ypos + (rowHeight - iconHeight) / 2 : ypos;
 					if (item == SelectedItem) {
 						context.Rectangle (0, ypos, Allocation.Width, rowHeight / 2);
-						context.Color = SelectionEnabled ? selectedItemColor.Foreground : selectedItemInactiveColor.Background;
+						context.SetSourceColor (SelectionEnabled ? selectedItemColor.Foreground : selectedItemInactiveColor.Background);
 						context.Fill ();
 						context.Rectangle (0, ypos + rowHeight / 2, Allocation.Width, rowHeight / 2);
-						context.Color = SelectionEnabled ? selectedItemColor.Background : selectedItemInactiveColor.Background;
+						context.SetSourceColor (SelectionEnabled ? selectedItemColor.Background : selectedItemInactiveColor.Background);
 						context.Fill ();
 
 						context.Rectangle (0.5, ypos + 0.5, Allocation.Width - 1, rowHeight - 1);
 						if (!SelectionEnabled)
 							context.SetDash (new double[] {4, 4}, 0);
-						context.Color = SelectionEnabled ? selectionBorderColor : selectionBorderInactiveColor;
+						context.SetSourceColor (SelectionEnabled ? selectionBorderColor : selectionBorderInactiveColor);
 						context.Stroke ();
 					} 
 
@@ -547,9 +545,26 @@ namespace MonoDevelop.Ide.CodeCompletion
 						context.Paint ();
 						xpos += iconTextSpacing;
 					}
-					context.Color = textColor;
+					context.SetSourceColor (textColor);
 					context.MoveTo (xpos + iconWidth + 2, typos);
 					PangoCairoHelper.ShowLayout (context, layout);
+
+					layout.SetMarkup ("");
+					if (layout.Attributes != null) {
+						layout.Attributes.Dispose ();
+						layout.Attributes = null;
+					}
+
+					string rightText = win.DataProvider.GetRightSideDescription (item, item == SelectedItem);
+					if (!string.IsNullOrEmpty (rightText)) {
+						layout.SetMarkup (rightText);
+						int w, h;
+						layout.GetPixelSize (out w, out h);
+						wi += w;
+						typos = h < rowHeight ? ypos + (rowHeight - h) / 2 : ypos;
+						context.MoveTo (Allocation.Width - w, typos);
+						PangoCairoHelper.ShowLayout (context, layout);
+					}
 
 					if (wi + xpos + iconWidth + 2 > listWidth) {
 						WidthRequest = listWidth = wi + xpos + iconWidth + 2 + iconTextSpacing;
@@ -565,11 +580,6 @@ namespace MonoDevelop.Ide.CodeCompletion
 					}
 
 
-					layout.SetMarkup ("");
-					if (layout.Attributes != null) {
-						layout.Attributes.Dispose ();
-						layout.Attributes = null;
-					}
 					return true;
 				});
 
@@ -632,12 +642,7 @@ namespace MonoDevelop.Ide.CodeCompletion
 			}
 
 			filteredItems.Sort (delegate (int left, int right) {
-				var lt = win.DataProvider.GetText (left);
-				var rt = win.DataProvider.GetText (right);
-				var result = lt.CompareTo (rt);
-				if (result == 0)
-					return right.CompareTo (left);
-				return result;
+				return win.DataProvider.CompareTo (left, right);
 			});
 			categories.Sort (delegate (Category left, Category right) {
 				return left.CompletionCategory != null ? left.CompletionCategory.CompareTo (right.CompletionCategory) : -1;
@@ -719,7 +724,6 @@ namespace MonoDevelop.Ide.CodeCompletion
 				requisition.Height += requisition.Height % rowHeight;
 		}
 
-		const int maxVisibleRows = 7;
 		void CalcVisibleRows ()
 		{
 
@@ -728,7 +732,7 @@ namespace MonoDevelop.Ide.CodeCompletion
 			layout.GetPixelSize (out rowWidth, out rowHeight);
 			rowHeight = Math.Max (1, rowHeight * 3 / 2);
 
-			int newHeight = rowHeight * maxVisibleRows;
+			int newHeight = rowHeight * CompletionTextEditorExtension.CompletionListRows;
 			if (Allocation.Height != listWidth || Allocation.Width != newHeight)
 				this.SetSizeRequest (listWidth, newHeight);
 			SetAdjustments ();

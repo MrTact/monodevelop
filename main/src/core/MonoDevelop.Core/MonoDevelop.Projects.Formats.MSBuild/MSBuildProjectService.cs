@@ -83,20 +83,16 @@ namespace MonoDevelop.Projects.Formats.MSBuild
 			};
 
 			PropertyService.PropertyChanged += HandlePropertyChanged;
-			DefaultBuildWithMSBuild = PropertyService.Get ("MonoDevelop.Ide.BuildWithMSBuild", false);
 			DefaultMSBuildVerbosity = PropertyService.Get ("MonoDevelop.Ide.MSBuildVerbosity", MSBuildVerbosity.Normal);
 		}
 
 		static void HandlePropertyChanged (object sender, PropertyChangedEventArgs e)
 		{
-			if (e.Key == "MonoDevelop.Ide.BuildWithMSBuild") {
-				DefaultBuildWithMSBuild = (bool) e.NewValue;
-			} else if (e.Key == "MonoDevelop.Ide.MSBuildVerbosity") {
+			if (e.Key == "MonoDevelop.Ide.MSBuildVerbosity") {
 				DefaultMSBuildVerbosity = (MSBuildVerbosity) e.NewValue;
 			}
 		}
 
-		internal static bool DefaultBuildWithMSBuild { get; private set; }
 		internal static MSBuildVerbosity DefaultMSBuildVerbosity { get; private set; }
 		
 		public static SolutionEntityItem LoadItem (IProgressMonitor monitor, string fileName, MSBuildFileFormat expectedFormat, string typeGuid, string itemGuid)
@@ -181,6 +177,17 @@ namespace MonoDevelop.Projects.Formats.MSBuild
 			}
 
 			return false;
+		}
+
+		public static void CheckHandlerUsesMSBuildEngine (SolutionItem item, out bool useByDefault, out bool require)
+		{
+			var handler = item.ItemHandler as MSBuildProjectHandler;
+			if (handler == null) {
+				useByDefault = require = false;
+				return;
+			}
+			useByDefault = handler.UseMSBuildEngineByDefault;
+			require = handler.RequireMSBuildEngine;
 		}
 
 		internal static DotNetProjectSubtypeNode GetDotNetProjectSubtype (string typeGuids)
@@ -300,12 +307,10 @@ namespace MonoDevelop.Projects.Formats.MSBuild
 		
 		public static string ToMSBuildPath (string baseDirectory, string absPath)
 		{
-			absPath = EscapeString (absPath);
 			if (baseDirectory != null) {
-				absPath = FileService.NormalizeRelativePath (FileService.AbsoluteToRelativePath (
-				         baseDirectory, absPath));
+				absPath = FileService.NormalizeRelativePath (FileService.AbsoluteToRelativePath (baseDirectory, absPath));
 			}
-			return absPath.Replace ('/', '\\');
+			return EscapeString (absPath).Replace ('/', '\\');
 		}
 		
 		internal static string ToMSBuildPathRelative (string baseDirectory, string absPath)
@@ -369,7 +374,7 @@ namespace MonoDevelop.Projects.Formats.MSBuild
 			
 			// If we're on Windows, don't need to fix file casing.
 			if (Platform.IsWindows) {
-				resultPath = Path.GetFullPath (path);
+				resultPath = FileService.GetFullPath (path);
 				return true;
 			}
 			

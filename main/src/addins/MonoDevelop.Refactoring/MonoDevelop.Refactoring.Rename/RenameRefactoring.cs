@@ -186,7 +186,13 @@ namespace MonoDevelop.Refactoring.Rename
 		{
 			if (options.SelectedItem is IVariable) {
 				var field = options.SelectedItem as IField;
-				if (field != null && field.Accessibility != Accessibility.Private) {
+				if (field != null && (field.Accessibility != Accessibility.Private || field.DeclaringTypeDefinition != null && field.DeclaringTypeDefinition.Parts.Count > 1)) {
+					MessageService.ShowCustomDialog (new RenameItemDialog (options, this));
+					return;
+				}
+
+				var par = options.SelectedItem as IParameter;
+				if (par != null && (par.Owner.Accessibility != Accessibility.Private || par.Owner.DeclaringTypeDefinition != null && par.Owner.DeclaringTypeDefinition.Parts.Count > 1)) {
 					MessageService.ShowCustomDialog (new RenameItemDialog (options, this));
 					return;
 				}
@@ -224,7 +230,6 @@ namespace MonoDevelop.Refactoring.Rename
 				tle.SelectPrimaryLink = true;
 				if (tle.ShouldStartTextLinkMode) {
 					var helpWindow = new TableLayoutModeHelpWindow ();
-					helpWindow.TransientFor = IdeApp.Workbench.RootWindow;
 					helpWindow.TitleText = options.SelectedItem is IVariable ? GettextCatalog.GetString ("<b>Local Variable -- Renaming</b>") : GettextCatalog.GetString ("<b>Parameter -- Renaming</b>");
 					helpWindow.Items.Add (new KeyValuePair<string, string> (GettextCatalog.GetString ("<b>Key</b>"), GettextCatalog.GetString ("<b>Behavior</b>")));
 					helpWindow.Items.Add (new KeyValuePair<string, string> (GettextCatalog.GetString ("<b>Return</b>"), GettextCatalog.GetString ("<b>Accept</b> this refactoring.")));
@@ -254,6 +259,11 @@ namespace MonoDevelop.Refactoring.Rename
 				get;
 				set;
 			}
+
+			public bool IncludeOverloads {
+				get;
+				set;
+			}
 		}
 		
 		public override List<Change> PerformChanges (RefactoringOptions options, object prop)
@@ -262,7 +272,7 @@ namespace MonoDevelop.Refactoring.Rename
 			List<Change> result = new List<Change> ();
 			IEnumerable<MemberReference> col = null;
 			using (var monitor = new MessageDialogProgressMonitor (true, false, false, true)) {
-				col = ReferenceFinder.FindReferences (options.SelectedItem, true, monitor);
+				col = ReferenceFinder.FindReferences (options.SelectedItem, properties.IncludeOverloads, monitor);
 				if (col == null)
 					return result;
 					

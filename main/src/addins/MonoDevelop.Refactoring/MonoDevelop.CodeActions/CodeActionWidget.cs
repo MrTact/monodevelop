@@ -42,6 +42,7 @@ using MonoDevelop.Refactoring;
 using MonoDevelop.Projects;
 using MonoDevelop.Core.ProgressMonitoring;
 using ICSharpCode.NRefactory.Refactoring;
+using System.Threading;
 
 namespace MonoDevelop.CodeActions
 {
@@ -108,7 +109,7 @@ namespace MonoDevelop.CodeActions
 			usages.Set (id, CodeActionUsages [id]);
 		}
 
-		int GetUsage (string id)
+		internal static int GetUsage (string id)
 		{
 			int result;
 			if (!CodeActionUsages.TryGetValue (id, out result)) 
@@ -116,26 +117,40 @@ namespace MonoDevelop.CodeActions
 			return result;
 		}
 
+		internal static bool IsAnalysisOrErrorFix (CodeAction act)
+		{
+			return act is AnalysisContextActionProvider.AnalysisCodeAction || act.Severity == Severity.Error;
+		} 
+
 		public void PopulateFixes (Gtk.Menu menu, ref int items)
 		{
 			int mnemonic = 1;
-			foreach (var fix_ in fixes.OrderByDescending (i => GetUsage (i.IdString))) {
+			bool gotImportantFix = false, addedSeparator = false;
+			foreach (var fix_ in fixes.OrderByDescending (i => Tuple.Create (IsAnalysisOrErrorFix(i), (int)i.Severity, GetUsage (i.IdString)))) {
+				if (IsAnalysisOrErrorFix (fix_))
+					gotImportantFix = true;
+				if (!addedSeparator && gotImportantFix && !IsAnalysisOrErrorFix(fix_)) {
+					menu.Add (new Gtk.SeparatorMenuItem ());
+					addedSeparator = true;
+				}
+
 				var fix = fix_;
 				var escapedLabel = fix.Title.Replace ("_", "__");
 				var label = (mnemonic <= 10)
 					? "_" + (mnemonic++ % 10).ToString () + " " + escapedLabel
 						: "  " + escapedLabel;
-				var menuItem = new Gtk.MenuItem (label);
-				menuItem.Activated += new ContextActionRunner (fix, document, loc).Run;
-				menuItem.Activated += delegate {
+				var thisInstanceMenuItem = new Gtk.MenuItem (label);
+				thisInstanceMenuItem.Activated += new ContextActionRunner (fix, document, loc).Run;
+				thisInstanceMenuItem.Activated += delegate {
 					ConfirmUsage (fix.IdString);
 					menu.Destroy ();
 				};
-				menu.Add (menuItem);
+				menu.Add (thisInstanceMenuItem);
 				items++;
 			}
-			var first = true;
-			var alreadyInserted = new HashSet<CodeIssueProvider> ();
+
+			bool first = true;
+			var alreadyInserted = new HashSet<BaseCodeIssueProvider> ();
 			foreach (var analysisFix_ in fixes.OfType <AnalysisContextActionProvider.AnalysisCodeAction>().Where (f => f.Result is InspectorResults)) {
 				var analysisFix = analysisFix_;
 				var ir = analysisFix.Result as InspectorResults;
@@ -149,42 +164,62 @@ namespace MonoDevelop.CodeActions
 				if (alreadyInserted.Contains (ir.Inspector))
 					continue;
 				alreadyInserted.Add (ir.Inspector);
-				
-				var label = GettextCatalog.GetString ("_Inspection options for \"{0}\"", ir.Inspector.Title);
-				var menuItem = new Gtk.MenuItem (label);
-				menuItem.Activated += analysisFix.ShowOptions;
-				menuItem.Activated += delegate {
-					menu.Destroy ();
-				};
-				menu.Add (menuItem);
-				items++;
-			}
 
-			foreach (var fix_ in fixes.Where (f => f.BoundToIssue != null)) {
-				var fix = fix_;
-				foreach (var inspector_ in RefactoringService.GetInspectors (document.Editor.MimeType).Where (i => i.GetSeverity () != Severity.None)) {
-					var inspector = inspector_;
-
-					if (inspector.IdString.IndexOf (fix.BoundToIssue.FullName, StringComparison.Ordinal) < 0)
-						continue;
-					if (first) {
-						menu.Add (new Gtk.SeparatorMenuItem ());
-						first = false;
-					}
-					if (alreadyInserted.Contains (inspector))
-						continue;
-					alreadyInserted.Add (inspector);
-					
-					var label = GettextCatalog.GetString ("_Inspection options for \"{0}\"", inspector.Title);
-					var menuItem = new Gtk.MenuItem (label);
-					menuItem.Activated += delegate {
-						MessageService.RunCustomDialog (new CodeIssueOptionsDialog (inspector), MessageService.RootWindow);
+				var subMenu = new Gtk.Menu ();
+				if (analysisFix.SupportsBatchRunning) {
+					var batchRunMenuItem = new Gtk.MenuItem (GettextCatalog.GetString ("Fix all in this file"));
+					batchRunMenuItem.Activated += delegate {
+						ConfirmUsage (analysisFix.IdString);
 						menu.Destroy ();
 					};
-					menu.Add (menuItem);
-					break;
+					batchRunMenuItem.Activated += new ContextActionRunner (analysisFix, document, loc).BatchRun;
+					subMenu.Add (batchRunMenuItem);
+					subMenu.Add (new Gtk.SeparatorMenuItem ());
 				}
 
+				var inspector = ir.Inspector;
+				if (inspector.CanSuppressWithAttribute) {
+					var menuItem = new Gtk.MenuItem (GettextCatalog.GetString ("_Suppress with attribute"));
+					menuItem.Activated += delegate {
+						inspector.SuppressWithAttribute (document, analysisFix.DocumentRegion); 
+					};
+					subMenu.Add (menuItem);
+				}
+
+				if (inspector.CanDisableWithPragma) {
+					var menuItem = new Gtk.MenuItem (GettextCatalog.GetString ("_Suppress with #pragma"));
+					menuItem.Activated += delegate {
+						inspector.DisableWithPragma (document, analysisFix.DocumentRegion); 
+					};
+					subMenu.Add (menuItem);
+				}
+
+				if (inspector.CanDisableOnce) {
+					var menuItem = new Gtk.MenuItem (GettextCatalog.GetString ("_Disable once with comment"));
+					menuItem.Activated += delegate {
+						inspector.DisableOnce (document, analysisFix.DocumentRegion); 
+					};
+					subMenu.Add (menuItem);
+				}
+
+				if (inspector.CanDisableAndRestore) {
+					var menuItem = new Gtk.MenuItem (GettextCatalog.GetString ("Disable _and restore with comments"));
+					menuItem.Activated += delegate {
+						inspector.DisableAndRestore (document, analysisFix.DocumentRegion); 
+					};
+					subMenu.Add (menuItem);
+				}
+				var label = GettextCatalog.GetString ("_Options for \"{0}\"", InspectorResults.GetTitle (ir.Inspector));
+				var subMenuItem = new Gtk.MenuItem (label);
+
+				var optionsMenuItem = new Gtk.MenuItem (GettextCatalog.GetString ("_Configure inspection"));
+				optionsMenuItem.Activated += analysisFix.ShowOptions;
+				optionsMenuItem.Activated += delegate {
+					menu.Destroy ();
+				};
+				subMenu.Add (optionsMenuItem);
+				subMenuItem.Submenu = subMenu;
+				menu.Add (subMenuItem);
 				items++;
 			}
 		}
@@ -203,6 +238,16 @@ namespace MonoDevelop.CodeActions
 					node,
 					ref resolveResult
 				);
+
+				foreach (var t in possibleNamespaces.Where (tp => tp.OnlyAddReference)) {
+					var menuItem = new Gtk.MenuItem (t.GetImportText ());
+					menuItem.Activated += delegate {
+						new ResolveCommandHandler.AddImport (document, resolveResult, null, t.Reference, true, node).Run ();
+						menu.Destroy ();
+					};
+					menu.Add (menuItem);
+					items++;
+				}
 	
 				bool addUsing = !(resolveResult is AmbiguousTypeResolveResult);
 				if (addUsing) {
@@ -289,7 +334,13 @@ namespace MonoDevelop.CodeActions
 			
 			public void Run (object sender, EventArgs e)
 			{
-				act.Run (document, loc);
+				var context = document.ParsedDocument.CreateRefactoringContext (document, CancellationToken.None);
+				RefactoringService.ApplyFix (act, context);
+			}
+			
+			public void BatchRun (object sender, EventArgs e)
+			{
+				act.BatchRun (document, loc);
 			}
 		}
 		
@@ -326,7 +377,7 @@ namespace MonoDevelop.CodeActions
 			using (var cr = Gdk.CairoHelper.Create (evnt.Window)) {
 				cr.LineWidth = border;
 				cr.Rectangle (0, 0, Allocation.Width, Allocation.Height);
-				cr.Color = document.Editor.ColorStyle.PlainText.Background;
+				cr.SetSourceColor (document.Editor.ColorStyle.PlainText.Background);
 				cr.Fill ();
 				
 				FoldingScreenbackgroundRenderer.DrawRoundRectangle (cr,

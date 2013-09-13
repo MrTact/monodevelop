@@ -172,7 +172,8 @@ namespace MonoDevelop.SourceEditor
 		protected override void OnDestroyed ()
 		{
 			UnregisterAdjustments ();
-
+			resolveResult = null;
+			Extension = null;
 			ExtensionContext = null;
 			view = null;
 			base.OnDestroyed ();
@@ -318,36 +319,21 @@ namespace MonoDevelop.SourceEditor
 			DocumentLine line = Document.GetLine (Caret.Line);
 			if (line == null)
 				return true;
-			bool inChar = false;
-			bool inComment = false;
-			bool inString = false;
 			//			string escape = "\"";
 			var stack = line.StartSpan.Clone ();
 			var sm = Document.SyntaxMode as SyntaxMode;
 			if (sm != null)
 				Mono.TextEditor.Highlighting.SyntaxModeService.ScanSpans (Document, sm, sm, stack, line.Offset, Caret.Offset);
+			string spanColor = null;
 			foreach (Span span in stack) {
 				if (string.IsNullOrEmpty (span.Color))
 					continue;
-				if (span.Color == "string.other") {
-					inStringOrComment = inChar = inString = true;
-					break;
-				}
-				if (span.Color == "string.single" || span.Color == "string.double" || span.Color.StartsWith ("comment")) {
+				if (span.Color.StartsWith ("String", StringComparison.Ordinal) || span.Color.StartsWith ("Comment", StringComparison.Ordinal)) {
+					spanColor = span.Color;
 					inStringOrComment = true;
-					inChar |= span.Color == "string.single";
-					inComment |= span.Color.StartsWith ("comment");
-					inString = !inChar && !inComment;
-					//escape = span.Escape;
 					break;
 				}
 			}
-			if (Caret.Offset > 0) {
-				char c = GetCharAt (Caret.Offset - 1);
-				if (c == '"' || c == '\'')
-					inStringOrComment = inChar = inString = true;
-			}
-
 			// insert template when space is typed (currently disabled - it's annoying).
 			bool templateInserted = false;
 			//!inStringOrComment && (key == Gdk.Key.space) && DoInsertTemplate ();
@@ -363,8 +349,14 @@ namespace MonoDevelop.SourceEditor
 			// special handling for escape chars inside ' and "
 			if (Caret.Offset > 0) {
 				char charBefore = Document.GetCharAt (Caret.Offset - 1);
-				if (inStringOrComment && (ch == '"' || (inChar && ch == '\'')) && charBefore == '\\')
-					skipChar = null;
+				if (ch == '"') {
+					if (!inStringOrComment && charBefore == '"' || 
+					    inStringOrComment && spanColor == "String" && charBefore == '\\' ) {
+						skipChar = null;
+						braceIndex = -1;
+					}
+				}
+
 			}
 			char insertionChar = '\0';
 			bool insertMatchingBracket = false;
@@ -389,7 +381,7 @@ namespace MonoDevelop.SourceEditor
 					}
 				} else {
 					char charBefore = Document.GetCharAt (Caret.Offset - 1);
-					if (!inString && !inComment && !inChar && ch == '"' && charBefore != '\\') {
+					if (!inStringOrComment && ch == '"' && charBefore != '\\') {
 						insertMatchingBracket = true;
 						insertionChar = '"';
 					}
@@ -574,23 +566,29 @@ namespace MonoDevelop.SourceEditor
 			var ctx = ExtensionContext ?? AddinManager.AddinEngine;
 			CommandEntrySet cset = IdeApp.CommandService.CreateCommandEntrySet (ctx, menuPath);
 			Gtk.Menu menu = IdeApp.CommandService.CreateMenu (cset);
-			
 			var imMenu = CreateInputMethodMenuItem (GettextCatalog.GetString ("_Input Methods"));
 			if (imMenu != null) {
 				menu.Append (new SeparatorMenuItem ());
 				menu.Append (imMenu);
 			}
 			
-			menu.Destroyed += delegate {
-				this.QueueDraw ();
-			};
-			
+			menu.Hidden += HandleMenuHidden; 
 			if (evt != null) {
 				GtkWorkarounds.ShowContextMenu (menu, this, evt);
 			} else {
 				var pt = LocationToPoint (this.Caret.Location);
 				GtkWorkarounds.ShowContextMenu (menu, this, new Gdk.Rectangle (pt.X, pt.Y, 1, (int)LineHeight));
 			}
+		}
+
+		void HandleMenuHidden (object sender, EventArgs e)
+		{	
+			var menu = sender as Gtk.Menu;
+			menu.Hidden -= HandleMenuHidden; 
+			GLib.Timeout.Add (10, delegate {
+				menu.Destroy ();
+				return false;
+			});
 		}
 		
 #region Templates

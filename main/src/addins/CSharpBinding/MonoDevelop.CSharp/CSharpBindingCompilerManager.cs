@@ -27,6 +27,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using System.Text;
@@ -122,8 +123,14 @@ namespace MonoDevelop.CSharp
 			sb.AppendLine ();
 			
 			foreach (ProjectReference lib in projectItems.GetAll <ProjectReference> ()) {
-				if (lib.ReferenceType == ReferenceType.Project && !(lib.OwnerProject.ParentSolution.FindProjectByName (lib.Reference) is DotNetProject))
-					continue;
+				if (lib.ReferenceType == ReferenceType.Project) {
+					var ownerProject = lib.OwnerProject;
+					if (ownerProject != null) {
+						var parentSolution = ownerProject.ParentSolution;
+						if (parentSolution != null && !(parentSolution.FindProjectByName (lib.Reference) is DotNetProject))
+							continue;
+					}
+				} 
 				string refPrefix = string.IsNullOrEmpty (lib.Aliases) ? "" : lib.Aliases + "=";
 				foreach (string fileName in lib.GetReferencedFileNames (configSelector)) {
 					switch (lib.ReferenceType) {
@@ -159,12 +166,19 @@ namespace MonoDevelop.CSharp
 					}
 				}
 			}
-			
+
+			if (alreadyAddedReference.Any (reference => SystemAssemblyService.ContainsReferenceToSystemRuntime (reference))) {
+				LoggingService.LogInfo ("Found PCLv2 assembly.");
+				var facades = runtime.FindFacadeAssembliesForPCL (project.TargetFramework);
+				foreach (var facade in facades)
+					AppendQuoted (sb, "/r:", facade);
+			}
+
 			string sysCore = project.AssemblyContext.GetAssemblyFullName ("System.Core", project.TargetFramework);
-			if (sysCore != null) {
-				sysCore = project.AssemblyContext.GetAssemblyLocation (sysCore, project.TargetFramework);
-				if (sysCore != null && !alreadyAddedReference.Contains (sysCore))
-					AppendQuoted (sb, "/r:", sysCore);
+			if (sysCore != null && !alreadyAddedReference.Contains (sysCore)) {
+				var asm = project.AssemblyContext.GetAssemblyFromFullName (sysCore, null, project.TargetFramework);
+				if (asm != null)
+					AppendQuoted (sb, "/r:", asm.Location);
 			}
 			
 			sb.AppendLine ("/nologo");

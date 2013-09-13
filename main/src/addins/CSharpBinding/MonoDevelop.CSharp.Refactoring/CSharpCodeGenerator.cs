@@ -47,7 +47,7 @@ using ICSharpCode.NRefactory.TypeSystem.Implementation;
 
 namespace MonoDevelop.CSharp.Refactoring
 {
-	public class CSharpCodeGenerator : CodeGenerator
+	class CSharpCodeGenerator : CodeGenerator
 	{
 		static CSharpAmbience ambience = new CSharpAmbience ();
 		
@@ -387,7 +387,7 @@ namespace MonoDevelop.CSharp.Refactoring
 			result.AppendLine ("// NOTE: Don't call the base implementation on a Model class");
 			
 			AppendIndent (result);
-			result.AppendLine ("// see http://docs.xamarin.com/ios/tutorials/Events%2c_Protocols_and_Delegates ");
+			result.AppendLine ("// see http://docs.xamarin.com/guides/ios/application_fundamentals/delegates,_protocols,_and_events ");
 
 			AppendIndent (result);
 			result.Append ("throw new ");
@@ -624,7 +624,40 @@ namespace MonoDevelop.CSharp.Refactoring
 				AppendReturnType (result, options, p.Type);
 				result.Append (" ");
 				result.Append (CSharpAmbience.FilterName (p.Name));
+				if (p.ConstantValue != null) {
+					result.Append (" = ");
+					if (p.Type.Kind == TypeKind.Enum) {
+						bool found = false;
+						foreach (var literal in GetEnumLiterals(p.Type)) {
+							if (literal.ConstantValue.Equals (p.ConstantValue)) {
+								AppendReturnType (result, options, p.Type);
+								result.Append ("."+ literal.Name);
+								found = true;
+								break;
+							}
+						}
+						if (!found) {
+							result.Append ("(");
+							AppendReturnType (result, options, p.Type);
+							result.Append (")" + p.ConstantValue); 
+						}
+					} else if (p.ConstantValue is char) {
+						result.Append ("'" + p.ConstantValue + "'");
+					} else if (p.ConstantValue is string)  {
+						result.Append ("\"" + CSharpTextEditorIndentation.ConvertToStringLiteral ((string)p.ConstantValue) + "\"");
+					} else {
+						result.Append (p.ConstantValue);
+					}
+				} 
 			}
+		}
+
+		public IEnumerable<IField> GetEnumLiterals(IType type)
+		{
+			if (type.Kind != TypeKind.Enum)
+				throw new ArgumentException ("Type is no enum.");
+			foreach (var field in type.GetFields (f => f.IsConst && f.IsPublic))
+				yield return field;
 		}
 		
 		static string GetModifiers (ITypeDefinition implementingType, IUnresolvedTypeDefinition implementingPart, IMember member)
@@ -671,7 +704,7 @@ namespace MonoDevelop.CSharp.Refactoring
 //					foreach (var type in options.ImplementingType.BaseTypes) {
 //						if (type.Kind == TypeKind.Interface)
 //							continue;
-//						if (type.Members.Any (m => m.Name == member.Name && member.EntityType == m.EntityType /* && DomMethod.ParameterListEquals (member.Parameters, m.Parameters)*/ )) {
+//						if (type.Members.Any (m => m.Name == member.Name && member.SymbolKind == m.SymbolKind /* && DomMethod.ParameterListEquals (member.Parameters, m.Parameters)*/ )) {
 //							isFromInterface = false;
 //							break;
 //						}
@@ -720,7 +753,7 @@ namespace MonoDevelop.CSharp.Refactoring
 					} else {
 						AppendIndent (result);
 						bodyStartOffset = result.Length;
-						if (property.EntityType == EntityType.Indexer) {
+						if (property.SymbolKind == SymbolKind.Indexer) {
 							result.Append ("return base[");
 							if (property.Parameters.Count > 0)
 								result.Append (CSharpAmbience.FilterName (property.Parameters.First ().Name));
@@ -754,7 +787,7 @@ namespace MonoDevelop.CSharp.Refactoring
 					} else {
 						AppendIndent (result);
 						bodyStartOffset = result.Length;
-						if (property.EntityType == EntityType.Indexer) {
+						if (property.SymbolKind == SymbolKind.Indexer) {
 							result.Append ("base[");
 							if (property.Parameters.Count > 0)
 								result.Append (CSharpAmbience.FilterName (property.Parameters.First ().Name));

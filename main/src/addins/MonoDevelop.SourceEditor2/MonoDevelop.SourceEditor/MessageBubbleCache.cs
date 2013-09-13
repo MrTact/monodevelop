@@ -29,6 +29,7 @@ using Mono.TextEditor;
 using MonoDevelop.Ide;
 using MonoDevelop.Ide.Fonts;
 using Mono.TextEditor.Highlighting;
+using MonoDevelop.Components;
 
 namespace MonoDevelop.SourceEditor
 {
@@ -41,17 +42,207 @@ namespace MonoDevelop.SourceEditor
 		internal Dictionary<DocumentLine, double> lineWidthDictionary = new Dictionary<DocumentLine, double> ();
 		
 		internal TextEditor editor;
-		
+
 		internal Pango.FontDescription fontDescription;
+		internal Pango.FontDescription tooltipFontDescription;
+
+		public MessageBubbleTextMarker CurrentSelectedTextMarker;
 
 		public MessageBubbleCache (TextEditor editor)
 		{
 			this.editor = editor;
-			errorPixbuf = ImageService.GetPixbuf (MonoDevelop.Ide.Gui.Stock.Error, Gtk.IconSize.Menu);
-			warningPixbuf = ImageService.GetPixbuf (MonoDevelop.Ide.Gui.Stock.Warning, Gtk.IconSize.Menu);
+			errorPixbuf = ImageService.GetPixbuf ("md-bubble-error", Gtk.IconSize.Menu);
+			warningPixbuf = ImageService.GetPixbuf ("md-bubble-warning", Gtk.IconSize.Menu);
 			
 			editor.EditorOptionsChanged += HandleEditorEditorOptionsChanged;
+			editor.LeaveNotifyEvent += HandleLeaveNotifyEvent;
+			editor.MotionNotifyEvent += HandleMotionNotifyEvent;
+			editor.TextArea.BeginHover += HandleBeginHover;
+			editor.VAdjustment.ValueChanged += HandleValueChanged;
+			editor.HAdjustment.ValueChanged += HandleValueChanged;
 			fontDescription = FontService.GetFontDescription ("MessageBubbles");
+			tooltipFontDescription = FontService.GetFontDescription ("MessageBubbleTooltip");
+		}
+
+		void HandleValueChanged (object sender, EventArgs e)
+		{
+			DestroyPopoverWindow ();
+		}
+
+		void HandleMotionNotifyEvent (object o, Gtk.MotionNotifyEventArgs args)
+		{
+			if (CurrentSelectedTextMarker == null)
+				DestroyPopoverWindow ();
+		}
+
+		uint hoverTimeout;
+
+		void CancelHoverTimeout ()
+		{
+			if (hoverTimeout != 0) {
+				GLib.Source.Remove (hoverTimeout);
+				hoverTimeout = 0;
+			}
+		}
+		MessageBubblePopoverWindow popoverWindow;
+
+		internal static readonly Cairo.Color ShadowColor = new Cairo.Color (0, 0, 0, MonoDevelop.Core.Platform.IsMac ? 0.12 : 0.2);
+
+		class MessageBubblePopoverWindow : PopoverWindow
+		{
+			readonly MessageBubbleCache cache;
+			readonly MessageBubbleTextMarker marker;
+
+			public MessageBubblePopoverWindow (MessageBubbleCache cache, MessageBubbleTextMarker marker)
+			{
+				this.cache = cache;
+				this.marker = marker;
+				ShowArrow = true;
+				Opacity = 0.93;
+				Theme.ArrowLength = 7;
+				TransientFor = IdeApp.Workbench.RootWindow;
+			}
+
+			// Layout constants
+			const int verticalTextBorder = 10;
+			const int verticalTextSpace  = 6;
+
+			const int textBorder = 12;
+			const int iconTextSpacing = 8;
+
+			readonly int maxTextWidth = (int)(260 * Pango.Scale.PangoScale);
+
+			protected override void OnSizeRequested (ref Gtk.Requisition requisition)
+			{
+				base.OnSizeRequested (ref requisition);
+				double y = verticalTextBorder * 2 - verticalTextSpace; // one space get's added too much
+
+				using (var drawingLayout = new Pango.Layout (this.PangoContext)) {
+					drawingLayout.FontDescription = cache.tooltipFontDescription;
+
+					foreach (var msg in marker.Errors) {
+						if (marker.Layouts.Count == 1) 
+							drawingLayout.Width = maxTextWidth;
+						drawingLayout.SetText (GetFirstLine (msg));
+						int w;
+						int h;
+						drawingLayout.GetPixelSize (out w, out h);
+						if (marker.Layouts.Count > 1) 
+							w += cache.warningPixbuf.Width + iconTextSpacing;
+
+						requisition.Width = Math.Max (w + textBorder * 2, requisition.Width);
+						y += h + verticalTextSpace;
+					}
+				}
+
+				requisition.Height = (int)y;
+			}
+
+			protected override bool OnEnterNotifyEvent (Gdk.EventCrossing evnt)
+			{
+				cache.DestroyPopoverWindow ();
+				return base.OnEnterNotifyEvent (evnt);
+			}
+
+			protected override void OnDrawContent (Gdk.EventExpose evnt, Cairo.Context g)
+			{
+				Theme.BorderColor = marker.TooltipColor.Color;
+				g.Rectangle (0, 0, Allocation.Width, Allocation.Height);
+				g.SetSourceColor (marker.TooltipColor.Color);
+				g.Fill ();
+
+				using (var drawingLayout = new Pango.Layout (this.PangoContext)) {
+					drawingLayout.FontDescription = cache.tooltipFontDescription;
+					double y = verticalTextBorder;
+
+					var showBulletedList = marker.Errors.Count > 1;
+					foreach (var msg in marker.Errors) {
+
+						var icon = msg.IsError ? cache.errorPixbuf : cache.warningPixbuf;
+
+						if (!showBulletedList)
+							drawingLayout.Width = maxTextWidth;
+						drawingLayout.SetText (GetFirstLine (msg));
+						int w;
+						int h;
+						drawingLayout.GetPixelSize (out w, out h);
+
+						if (showBulletedList) {
+							g.Save ();
+
+							g.Translate (
+								textBorder,
+								y + verticalTextSpace / 2
+							);
+							Gdk.CairoHelper.SetSourcePixbuf (g, icon, 0, 0);
+							g.Paint ();
+							g.Restore ();
+						}
+
+						g.Save ();
+
+						g.Translate (showBulletedList ? textBorder + iconTextSpacing + icon.Width: textBorder, y + verticalTextSpace / 2 + 1);
+						g.SetSourceColor (ShadowColor);
+						g.ShowLayout (drawingLayout);
+
+						g.Translate (0, -1);
+
+						g.SetSourceColor (marker.TagColor.SecondColor);
+						g.ShowLayout (drawingLayout);
+
+						g.Restore ();
+
+
+						y += h + verticalTextSpace;
+					}
+				}
+
+			}
+		}
+
+		public void StartHover (MessageBubbleTextMarker marker, double bubbleX, double bubbleY, double bubbleWidth, bool isReduced)
+		{
+			CancelHoverTimeout ();
+			if (removedMarker == marker) {
+				CurrentSelectedTextMarker = marker;
+				return;
+			}
+
+			hoverTimeout = GLib.Timeout.Add (200, delegate {
+				CurrentSelectedTextMarker = marker;
+				editor.QueueDraw ();
+
+				DestroyPopoverWindow ();
+
+				if (marker.Layouts == null || marker.Layouts.Count < 2 && !isReduced)
+					return false;
+				popoverWindow = new MessageBubblePopoverWindow (this, marker);
+				popoverWindow.ShowWindowShadow = true;
+				popoverWindow.ShowPopup (editor, new Gdk.Rectangle ((int)(bubbleX + editor.TextViewMargin.XOffset), (int)bubbleY, (int)bubbleWidth, (int)editor.LineHeight) ,PopupPosition.Top);
+				return false;
+			});
+		}
+
+		MessageBubbleTextMarker removedMarker;
+
+		void HandleBeginHover (object sender, EventArgs e)
+		{
+			CancelHoverTimeout ();
+			removedMarker = CurrentSelectedTextMarker;
+			if (CurrentSelectedTextMarker == null)
+				return;
+			CurrentSelectedTextMarker = null;
+			editor.QueueDraw ();
+		}
+
+		void HandleLeaveNotifyEvent (object o, Gtk.LeaveNotifyEventArgs args)
+		{
+			DestroyPopoverWindow ();
+			CancelHoverTimeout ();
+			if (CurrentSelectedTextMarker == null)
+				return;
+			CurrentSelectedTextMarker = null;
+			editor.QueueDraw ();
 		}
 
 		public bool RemoveLine (DocumentLine line)
@@ -62,8 +253,23 @@ namespace MonoDevelop.SourceEditor
 			return true;
 		}
 
+		internal void DestroyPopoverWindow ()
+		{
+			if (popoverWindow != null) {
+				popoverWindow.Destroy ();
+				popoverWindow = null;
+			}
+		}
+
 		public void Dispose ()
 		{
+			CancelHoverTimeout ();
+			DestroyPopoverWindow ();
+			editor.VAdjustment.ValueChanged -= HandleValueChanged;
+			editor.HAdjustment.ValueChanged -= HandleValueChanged;
+			editor.TextArea.BeginHover -= HandleBeginHover;
+			editor.LeaveNotifyEvent -= HandleLeaveNotifyEvent;
+			editor.MotionNotifyEvent -= HandleMotionNotifyEvent;
 			editor.EditorOptionsChanged -= HandleEditorEditorOptionsChanged;
 			if (textWidthDictionary != null) {
 				foreach (var l in textWidthDictionary.Values) {

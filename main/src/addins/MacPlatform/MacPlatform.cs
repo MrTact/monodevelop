@@ -70,6 +70,9 @@ namespace MonoDevelop.MacIntegration
 
 		public MacPlatformService ()
 		{
+			if (IntPtr.Size == 8)
+				throw new Exception ("Mac integration is not yet 64-bit safe");
+
 			if (initedGlobal)
 				throw new Exception ("Only one MacPlatformService instance allowed");
 			initedGlobal = true;
@@ -82,15 +85,9 @@ namespace MonoDevelop.MacIntegration
 
 			//make sure the menu app name is correct even when running Mono 2.6 preview, or not running from the .app
 			Carbon.SetProcessName (BrandingService.ApplicationName);
-			
-			Cocoa.InitMonoMac ();
 
 			CheckGtkVersion (2, 24, 14);
 
-			timer.Trace ("Installing App Event Handlers");
-			GlobalSetup ();
-			
-			timer.EndTiming ();
 		}
 
 		static void CheckGtkVersion (uint major, uint minor, uint micro)
@@ -121,6 +118,20 @@ namespace MonoDevelop.MacIntegration
 				
 				Environment.Exit (1);
 			}
+		}
+
+		public override Xwt.Toolkit LoadNativeToolkit ()
+		{
+			var path = Path.GetDirectoryName (GetType ().Assembly.Location);
+			System.Reflection.Assembly.LoadFrom (Path.Combine (path, "Xwt.Mac.dll"));
+			var loaded = Xwt.Toolkit.Load (Xwt.ToolkitType.Cocoa);
+
+			// We require Xwt.Mac to initialize MonoMac before we can execute any code using MonoMac
+			timer.Trace ("Installing App Event Handlers");
+			GlobalSetup ();
+			timer.EndTiming ();
+
+			return loaded;
 		}
 
 		protected override string OnGetMimeTypeForUri (string uri)
@@ -275,7 +286,7 @@ namespace MonoDevelop.MacIntegration
 				ApplicationEvents.Quit += delegate (object sender, ApplicationQuitEventArgs e)
 				{
 					// We can only attempt to quit safely if all windows are GTK windows and not modal
-					if (GtkQuartz.GetToplevels ().All (t => t.Value != null && (!t.Value.Visible || !t.Value.Modal))) {
+					if (!IsModalDialogRunning ()) {
 						e.UserCancelled = !IdeApp.Exit ();
 						e.Handled = true;
 						return;
@@ -299,12 +310,7 @@ namespace MonoDevelop.MacIntegration
 				ApplicationEvents.Reopen += delegate (object sender, ApplicationEventArgs e) {
 					if (IdeApp.Workbench != null && IdeApp.Workbench.RootWindow != null) {
 						IdeApp.Workbench.RootWindow.Deiconify ();
-
-						// This is a workaround to a GTK+ bug. The HasTopLevelFocus flag is not properly
-						// set when the main window is restored. The workaround is to hide and re-show it.
-						// Since this happens before the next mainloop cycle, the window isn't actually affected.
-						IdeApp.Workbench.RootWindow.Hide ();
-						IdeApp.Workbench.RootWindow.Show ();
+						IdeApp.Workbench.RootWindow.Visible = true;
 
 						IdeApp.Workbench.RootWindow.Present ();
 						e.Handled = true;
@@ -320,33 +326,52 @@ namespace MonoDevelop.MacIntegration
 					});
 					e.Handled = true;
 				};
-				
-				//if not running inside an app bundle, assume usual MD build layout and load the app icon
-				FilePath exePath = System.Reflection.Assembly.GetExecutingAssembly ().Location;
-				string iconFile = null;
 
-				iconFile = BrandingService.GetString ("ApplicationIcon");
-				if (iconFile != null) {
-					iconFile = BrandingService.GetFile (iconFile);
-				}
-				else if (!exePath.ToString ().Contains ("MonoDevelop.app")) {
-						var mdSrcMain = exePath.ParentDirectory.ParentDirectory.ParentDirectory;
-						iconFile = mdSrcMain.Combine ("theme-icons", "Mac", "monodevelop.icns");
-				} else {
-					//HACK: override the app image
-					//NSApplication doesn't seem to pick up the image correctly, probably due to the
-					//getting confused about the bundle root because of the launch script
-					var bundleContents = exePath.ParentDirectory.ParentDirectory.ParentDirectory
-						.ParentDirectory.ParentDirectory;
-					iconFile = bundleContents.Combine ("Resources", "monodevelop.icns");
-				}
-				if (File.Exists (iconFile)) {
-					NSApplication.SharedApplication.ApplicationIconImage = new NSImage (iconFile);
+				//if not running inside an app bundle (at dev time), need to do some additional setup
+				if (NSBundle.MainBundle.InfoDictionary ["CFBundleIdentifier"] == null) {
+					SetupWithoutBundle ();
 				}
 			} catch (Exception ex) {
 				LoggingService.LogError ("Could not install app event handlers", ex);
 				setupFail = true;
 			}
+		}
+
+		static void SetupWithoutBundle ()
+		{
+			// set a bundle IDE to prevent NSProgress crash
+			// https://bugzilla.xamarin.com/show_bug.cgi?id=8850
+			NSBundle.MainBundle.InfoDictionary ["CFBundleIdentifier"] = new NSString ("com.xamarin.monodevelop");
+
+			FilePath exePath = System.Reflection.Assembly.GetExecutingAssembly ().Location;
+			string iconFile = null;
+			iconFile = BrandingService.GetString ("ApplicationIcon");
+			if (iconFile != null) {
+				iconFile = BrandingService.GetFile (iconFile);
+			} else {
+				var bundleRoot = GetAppBundleRoot (exePath);
+				if (bundleRoot.IsNotNull) {
+					//running from inside an app bundle, use its icon
+					iconFile = bundleRoot.Combine ("Contents", "Resources", "monodevelop.icns");
+				} else {
+					// assume running from build directory
+					var mdSrcMain = exePath.ParentDirectory.ParentDirectory.ParentDirectory;
+					iconFile = mdSrcMain.Combine ("theme-icons", "Mac", "monodevelop.icns");
+				}
+			}
+
+			if (File.Exists (iconFile)) {
+				NSApplication.SharedApplication.ApplicationIconImage = new NSImage (iconFile);
+			}
+		}
+
+		static FilePath GetAppBundleRoot (FilePath path)
+		{
+			do {
+				if (path.Extension == ".app")
+					return path;
+			} while ((path = path.ParentDirectory).IsNotNull);
+			return null;
 		}
 		
 		[GLib.ConnectBefore]
@@ -611,8 +636,6 @@ end tell", directory.ToString ().Replace ("\"", "\\\"")));
 
 		internal override MainToolbar CreateMainToolbar (Gtk.Window window)
 		{
-			NSApplication.Init ();
-			
 			NSWindow w = GtkQuartz.GetWindow (window);
 			w.IsOpaque = false;
 			
@@ -659,6 +682,11 @@ end tell", directory.ToString ().Replace ("\"", "\\\"")));
 					MonoMac.ObjCRuntime.Selector.GetHandle ("toggleFullScreen:"),
 					IntPtr.Zero);
 			}
+		}
+
+		public override bool IsModalDialogRunning ()
+		{
+			return GtkQuartz.GetToplevels ().Any (t => t.Key.IsVisible && (t.Value == null || t.Value.Modal));
 		}
 	}
 }

@@ -97,7 +97,7 @@ namespace MonoDevelop.Ide.FindInFiles
 		static IEnumerable<SearchCollector.FileList> GetFileNames (Solution solution, object node, RefactoryScope scope, 
 		                                                           IProgressMonitor monitor, IEnumerable<object> searchNodes)
 		{
-			if (!(node is IField) && node is IVariable || scope == RefactoryScope.File) {
+			if (!(node is IField) && !(node is IParameter) && node is IVariable || scope == RefactoryScope.File) {
 				string fileName;
 				if (node is IEntity) {
 					fileName = ((IEntity)node).Region.FileName;
@@ -122,6 +122,10 @@ namespace MonoDevelop.Ide.FindInFiles
 				if (fileList != null)
 					yield return fileList;
 				yield break;
+			}
+			var par = node as IParameter;
+			if (par != null) {
+				node = par.Owner;
 			}
 
 			var compilationProvider = (ICompilationProvider)node;
@@ -184,14 +188,14 @@ namespace MonoDevelop.Ide.FindInFiles
 				searchNodes = CollectMembers ((IType)member).ToList<object> ();
 			} else if (member is IEntity) {
 				var e = (IEntity)member;
-				if (e.EntityType == EntityType.Destructor) {
+				if (e.SymbolKind == SymbolKind.Destructor) {
 					foreach (var r in FindReferences (solution, e.DeclaringType, searchForAllOverloads, scope, monitor)) {
 						yield return r;
 					}
 					yield break;
 				}
-				if (member is IMember && searchForAllOverloads)
-					searchNodes = CollectMembers (solution, (IMember)member, scope).ToList<object> ();
+				if (member is IMember)
+					searchNodes = CollectMembers (solution, (IMember)member, scope, searchForAllOverloads).ToList<object> ();
 			}
 			// prepare references finder
 			var preparedFinders = new List<Tuple<ReferenceFinder, Project, IProjectContent, List<FilePath>>> ();
@@ -236,15 +240,15 @@ namespace MonoDevelop.Ide.FindInFiles
 
 		public abstract IEnumerable<MemberReference> FindReferences (Project project, IProjectContent content, IEnumerable<FilePath> files, IProgressMonitor monitor, IEnumerable<object> searchedMembers);
 
-		internal static IEnumerable<IMember> CollectMembers (Solution solution, IMember member, RefactoryScope scope)
+		internal static IEnumerable<IMember> CollectMembers (Solution solution, IMember member, RefactoryScope scope, bool includeOverloads = true)
 		{
-			return MemberCollector.CollectMembers (solution, member, scope);
+			return MemberCollector.CollectMembers (solution, member, scope, includeOverloads);
 		}
 		
 		internal static IEnumerable<IEntity> CollectMembers (IType type)
 		{
 			yield return (IEntity)type;
-			foreach (var c in type.GetDefinition ().GetMembers (m => m.EntityType == EntityType.Constructor, GetMemberOptions.IgnoreInheritedMembers)) {
+			foreach (var c in type.GetDefinition ().GetMembers (m => m.SymbolKind == SymbolKind.Constructor, GetMemberOptions.IgnoreInheritedMembers)) {
 				if (!c.IsSynthetic)
 					yield return c;
 			}

@@ -126,9 +126,15 @@ namespace MonoDevelop.Ide.FindInFiles
 			projectOnly = true;
 			foreach (var o in entities) {
 				var entity = o as IEntity;
-				if (entity == null)
+				if (entity != null) {
+					Collect (TypeSystemService.GetProject (entity), entity);
 					continue;
-				Collect (TypeSystemService.GetProject (entity), entity);
+				}
+				var par = o as IParameter;
+				if (par != null) {
+					Collect (TypeSystemService.GetProject (par.Owner), par.Owner);
+					continue;
+				}
 			}
 			return collectedProjects;
 		}
@@ -142,11 +148,15 @@ namespace MonoDevelop.Ide.FindInFiles
 					continue;
 				}
 
-
-				var entity = o as IEntity;
-				if (entity == null)
-					continue;
-				Collect (TypeSystemService.GetProject(entity), entity);
+				var par = o as IParameter;
+				if (par != null) {
+					Collect (TypeSystemService.GetProject (par.Owner), par.Owner);
+				} else {
+					var entity = o as IEntity;
+					if (entity == null)
+						continue;
+					Collect (TypeSystemService.GetProject (entity), entity);
+				}
 
 				if (searchProjectAdded) break;
 			}
@@ -220,21 +230,22 @@ namespace MonoDevelop.Ide.FindInFiles
 			case Accessibility.Public:
 			case Accessibility.Protected:
 			case Accessibility.ProtectedOrInternal:
+			case Accessibility.Internal:
+			case Accessibility.ProtectedAndInternal:
+
 				if (declaringType != null)
 					Collect (sourceProject, entity.DeclaringTypeDefinition, searchInProject);
 				else if (searchProject != null || searchInProject)
 					AddProject (sourceProject);
 				else {
-					foreach (var project in ReferenceFinder.GetAllReferencingProjects (solution, sourceProject))
+					foreach (var project in ReferenceFinder.GetAllReferencingProjects (solution, sourceProject)) {
+						if (entity.Accessibility == Accessibility.Internal || entity.Accessibility == Accessibility.ProtectedAndInternal) {
+							if (!entity.ParentAssembly.InternalsVisibleTo (TypeSystemService.GetProjectContentWrapper (project).Compilation.MainAssembly))
+								continue;
+						}
 						AddProject (project);
+					}
 				}
-				break;
-			case Accessibility.Internal:
-			case Accessibility.ProtectedAndInternal:
-				if (!projectOnly && declaringType != null)
-					Collect (sourceProject, entity.DeclaringTypeDefinition, true);
-				else
-					AddProject (sourceProject);
 				break;
 			default: // private
 				if (projectOnly)

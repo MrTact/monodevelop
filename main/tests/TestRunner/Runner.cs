@@ -28,21 +28,68 @@ using System.IO;
 using System.Reflection;
 using MonoDevelop.Core;
 using System.Collections.Generic;
+using Mono.Addins;
+using System.Linq;
+using Mono.Addins.Description;
 
 namespace MonoDevelop.Tests.TestRunner
 {
 	public class Runer: IApplication
 	{
-		#region IApplication implementation
-
 		public int Run (string[] arguments)
 		{
-			var list = new List<string> (arguments);
-			list.Add ("-domain=None");
-			return NUnit.ConsoleRunner.Runner.Main (list.ToArray ());
+			var args = new List<string> (arguments);
+			bool useGuiUnit = false;
+			foreach (var ar in args) {
+				if ((ar.EndsWith (".dll") || ar.EndsWith (".exe")) && File.Exists (ar)) {
+					try {
+						var asm = Assembly.LoadFrom (ar);
+						HashSet<string> ids = new HashSet<string> ();
+						foreach (var aname in asm.GetReferencedAssemblies ()) {
+							if (aname.Name == "GuiUnit") {
+								Assembly.LoadFile (Path.Combine (Path.GetDirectoryName (ar), "GuiUnit.exe"));
+								useGuiUnit = true;
+							}
+							ids.UnionWith (GetAddinsFromReferences (aname));
+						}
+
+						foreach (var id in ids)
+							AddinManager.LoadAddin (new Mono.Addins.ConsoleProgressStatus (false), id);
+
+					} catch (Exception ex) {
+						Console.WriteLine (ex);
+					}
+				}
+			}
+			if (useGuiUnit) {
+				var runnerType = Type.GetType ("GuiUnit.TestRunner, GuiUnit");
+				var method = runnerType.GetMethod ("Main", BindingFlags.Public | BindingFlags.Static);
+				return (int) method.Invoke (null, new [] { args.ToArray () });
+			} else {
+				args.RemoveAll (a => a.StartsWith ("-port="));
+				args.Add ("-domain=None");
+				return NUnit.ConsoleRunner.Runner.Main (args.ToArray ());
+			}
 		}
 
-		#endregion
+		IEnumerable<string> GetAddinsFromReferences (AssemblyName aname)
+		{
+			foreach (var adn in AddinManager.Registry.GetAddins ().Union (AddinManager.Registry.GetAddinRoots ())) {
+				foreach (ModuleDescription m in adn.Description.AllModules) {
+					bool found = false;
+					foreach (var sname in m.Assemblies) {
+						if (Path.GetFileNameWithoutExtension (sname) == aname.Name) {
+							found = true;
+							break;
+						}
+					}
+					if (found) {
+						yield return Addin.GetIdName (adn.Id);
+						break;
+					}
+				}
+			}
+		}
 	}
 }
 

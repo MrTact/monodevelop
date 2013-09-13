@@ -78,6 +78,7 @@
 			icon = "gtk-redo" 
 			_description = "Redo last undone action" 
 			shortcut = "Control|Shift|Z"
+			winShortcut = "Control|Y"
 			macShortcut = "Meta|Shift|Z" />
 	<Command id = "MonoDevelop.Ide.Commands.EditCommands.SelectAll" 
 			_label = "Select _All" 
@@ -319,6 +320,9 @@
 	<Command id = "MonoDevelop.Ide.Commands.ProjectCommands.Reload"
 			_description = "Reload selected project or solution"
 			_label = "Reload" />
+	<Command id = "MonoDevelop.Ide.Commands.ProjectCommands.EditSolutionItem"
+			_description = "Edit selected item"
+			_label = "Edit File" />			
 	<Command id = "MonoDevelop.Ide.Commands.ProjectCommands.ExportSolution"
 			defaultHandler = "MonoDevelop.Ide.Commands.ExportSolutionHandler"
 			_description = "Convert selected solution to another format"
@@ -489,7 +493,7 @@
 	<Command id = "MonoDevelop.Ide.Commands.FileTabCommands.ToggleMaximize"
 	         defaultHandler = "MonoDevelop.Ide.Commands.ToggleMaximizeHandler"
 			_label = "S_witch maximize/normal view"/>
-	<Command id ="MonoDevelop.Ide.Commands.FileTabCommands.ReopenClosedTab"
+	<Command id = "MonoDevelop.Ide.Commands.FileTabCommands.ReopenClosedTab"
 			defaultHandler = "MonoDevelop.Ide.Commands.ReopenClosedTabHandler"
 			_label = "Reopen Closed Tab"
 			_description = "Opens the last tab that has been closed"/>
@@ -708,7 +712,7 @@
 			_description = "Show about dialog" />
 	<Command id  = "MonoDevelop.Ide.Updater.UpdateCommands.CheckForUpdates"
 			defaultHandler = "MonoDevelop.Ide.Updater.CheckForUpdatesHandler"
-			_label = "_Check for Updates"
+			_label = "_Check for Updates..."
 			_description = "Check for updates to MonoDevelop and packages it requires" />
 	<Command id = "MonoDevelop.Ide.Commands.HelpCommands.SendFeedback"
 			defaultHandler = "MonoDevelop.Ide.Commands.SendFeedbackHandler"
@@ -840,9 +844,7 @@
 			shortcut = "Control|space" />
 	<Command id = "MonoDevelop.Ide.Commands.TextEditorCommands.ToggleCompletionSuggestionMode"
 			defaultHandler = "MonoDevelop.Ide.Commands.ToggleCompletionSuggestionModeHandler"
-			_label = "Toggle Completion Suggestion Mode" 
-			macShortcut="Alt|Shift|space"
-			shortcut = "Alt|Shift|space" />
+			_label = "Toggle Completion Suggestion Mode" />
 	<Command id = "MonoDevelop.Ide.Commands.TextEditorCommands.ShowCodeTemplateWindow"
 			_description="Inserts a template or when something is selected surrounds selection with a template"
 			_label = "I_nsert Template..."/>

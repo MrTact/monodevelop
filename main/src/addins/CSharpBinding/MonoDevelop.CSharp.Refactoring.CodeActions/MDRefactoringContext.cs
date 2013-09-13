@@ -42,7 +42,7 @@ using MonoDevelop.CSharp.Formatting;
 
 namespace MonoDevelop.CSharp.Refactoring.CodeActions
 {
-	public class MDRefactoringContext : RefactoringContext
+	class MDRefactoringContext : RefactoringContext, IRefactoringContext
 	{
 		public TextEditorData TextEditor {
 			get;
@@ -58,7 +58,7 @@ namespace MonoDevelop.CSharp.Refactoring.CodeActions
 			get {
 				if (Resolver == null || TextEditor == null)
 					return true;
-				return ParsedDocument == null || ParsedDocument.HasErrors;
+				return ParsedDocument == null;
 			}
 		}
 
@@ -71,6 +71,14 @@ namespace MonoDevelop.CSharp.Refactoring.CodeActions
 			get {
 				Debug.Assert (!IsInvalid);
 				return ParsedDocument.GetAst<SyntaxTree> ();
+			}
+		}
+
+		public override string DefaultNamespace {
+			get {
+				if (Project == null || TextEditor == null || string.IsNullOrEmpty (TextEditor.FileName))
+					return null;
+				return Project.GetDefaultNamespace (TextEditor.FileName);
 			}
 		}
 
@@ -96,25 +104,25 @@ namespace MonoDevelop.CSharp.Refactoring.CodeActions
 				return TextEditor.CreateNRefactoryTextEditorOptions ();
 			}
 		}
-		
+
 		public override bool IsSomethingSelected { 
 			get {
 				return TextEditor.IsSomethingSelected;
 			}
 		}
-		
+
 		public override string SelectedText {
 			get {
 				return TextEditor.SelectedText;
 			}
 		}
-		
+
 		public override TextLocation SelectionStart {
 			get {
 				return TextEditor.MainSelection.Start;
 			}
 		}
-		
+
 		public override TextLocation SelectionEnd { 
 			get {
 				return TextEditor.MainSelection.End;
@@ -125,7 +133,7 @@ namespace MonoDevelop.CSharp.Refactoring.CodeActions
 		{
 			return TextEditor.LocationToOffset (location);
 		}
-		
+
 		public override TextLocation GetLocation (int offset)
 		{
 			return TextEditor.OffsetToLocation (offset);
@@ -135,40 +143,53 @@ namespace MonoDevelop.CSharp.Refactoring.CodeActions
 		{
 			return TextEditor.GetTextAt (offset, length);
 		}
-		
+
 		public override string GetText (ICSharpCode.NRefactory.Editor.ISegment segment)
 		{
 			return TextEditor.GetTextAt (segment.Offset, segment.Length);
 		}
-		
+
 		public override ICSharpCode.NRefactory.Editor.IDocumentLine GetLineByOffset (int offset)
 		{
 			return TextEditor.GetLineByOffset (offset);
 		}
 
-		readonly TextLocation location;
+		readonly Document document;
+		TextLocation location;
+
 		public override TextLocation Location {
 			get {
 				return location;
 			}
 		}
 
-		CSharpFormattingOptions formattingOptions;
+		internal void SetLocation (TextLocation loc)
+		{
+			location = RefactoringService.GetCorrectResolveLocation (document, loc);
+		}
+
+		readonly CSharpFormattingOptions formattingOptions;
 
 		public Script StartScript ()
 		{
 			return new MDRefactoringScript (this, formattingOptions);
 		}
 
+		public IDisposable CreateScript ()
+		{
+			return StartScript ();
+		}
+
 		public MDRefactoringContext (Document document, TextLocation loc, CancellationToken cancellationToken = default (CancellationToken)) : base (document.GetSharedResolver ().Result, cancellationToken)
 		{
 			if (document == null)
 				throw new ArgumentNullException ("document");
+			this.document = document;
 			this.TextEditor = document.Editor;
 			this.ParsedDocument = document.ParsedDocument;
 			this.Project = document.Project as DotNetProject;
 			this.formattingOptions = document.GetFormattingOptions ();
-			this.location = RefactoringService.GetCorrectResolveLocation (document, loc);
+			this.location = loc;
 			var policy = document.HasProject ? Project.Policies.Get<NameConventionPolicy> () : MonoDevelop.Projects.Policies.PolicyService.GetDefaultPolicy<NameConventionPolicy> ();
 			Services.AddService (typeof(NamingConventionService), policy.CreateNRefactoryService ());
 		}

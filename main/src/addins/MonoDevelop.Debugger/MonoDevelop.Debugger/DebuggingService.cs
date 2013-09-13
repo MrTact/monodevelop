@@ -46,6 +46,7 @@ using ICSharpCode.NRefactory.Semantics;
  * exceptions, now we error out silently, this needs a real solution.
  */
 using MonoDevelop.Ide.TextEditing;
+using System.Linq;
 
 namespace MonoDevelop.Debugger
 {
@@ -139,11 +140,13 @@ namespace MonoDevelop.Debugger
 				Breakpoint bp = new Breakpoint (watch.File, watch.Line);
 				bp.TraceExpression = "{" + watch.Expression + "}";
 				bp.HitAction = HitAction.PrintExpression;
-				breakpoints.Add (bp);
+				lock (breakpoints)
+					breakpoints.Add (bp);
 				pinnedWatches.Bind (watch, bp);
 			} else {
 				pinnedWatches.Bind (watch, null);
-				breakpoints.Remove (watch.BoundTracer);
+				lock (breakpoints)
+					breakpoints.Remove (watch.BoundTracer);
 			}
 		}
 		
@@ -182,19 +185,27 @@ namespace MonoDevelop.Debugger
 			}
 		}
 		
-		internal static IEnumerable<IValueVisualizer> GetValueVisualizers (ObjectValue val)
+		internal static IEnumerable<ValueVisualizer> GetValueVisualizers (ObjectValue val)
 		{
-			foreach (IValueVisualizer v in AddinManager.GetExtensionObjects ("/MonoDevelop/Debugging/ValueVisualizers", false))
-				if (v.CanVisualize (val))
-					yield return v;
+			foreach (object v in AddinManager.GetExtensionObjects ("/MonoDevelop/Debugging/ValueVisualizers", false)) {
+				if (v is ValueVisualizer) {
+					var vv = (ValueVisualizer)v;
+					if (vv.CanVisualize (val))
+						yield return vv;
+				}
+#pragma warning disable 618
+				if (v is IValueVisualizer) {
+					var vv = (IValueVisualizer)v;
+					if (vv.CanVisualize (val))
+						yield return new ValueVisualizerWrapper (vv);
+				}
+#pragma warning restore 618
+			}
 		}
 		
 		internal static bool HasValueVisualizers (ObjectValue val)
 		{
-			foreach (IValueVisualizer v in AddinManager.GetExtensionObjects ("/MonoDevelop/Debugging/ValueVisualizers", false))
-				if (v.CanVisualize (val))
-					return true;
-			return false;
+			return GetValueVisualizers (val).Any ();
 		}
 		
 		public static void ShowValueVisualizer (ObjectValue val)
@@ -220,7 +231,8 @@ namespace MonoDevelop.Debugger
 				bp.HitAction = HitAction.PrintExpression;
 				bp.TraceExpression = dlg.Text;
 				bp.ConditionExpression = dlg.Condition;
-				Breakpoints.Add (bp);
+				lock (breakpoints)
+					breakpoints.Add (bp);
 			}
 			dlg.Destroy ();
 		}
@@ -553,7 +565,6 @@ namespace MonoDevelop.Debugger
 				Cleanup ();
 				throw;
 			}
-
 		}
 		
 		static bool ExceptionHandler (Exception ex)
@@ -876,24 +887,26 @@ namespace MonoDevelop.Debugger
 		
 		static void OnLineCountChanged (object ob, LineCountEventArgs a)
 		{
-			foreach (Breakpoint bp in breakpoints.GetBreakpoints ()) {
-				if (bp.FileName == a.TextFile.Name) {
-					if (bp.Line > a.LineNumber) {
-						// If the line that has the breakpoint is deleted, delete the breakpoint, otherwise update the line #.
-						if (bp.Line + a.LineCount >= a.LineNumber)
-							breakpoints.UpdateBreakpointLine (bp, bp.Line + a.LineCount);
-						else
+			lock (breakpoints) {
+				foreach (Breakpoint bp in breakpoints.GetBreakpoints ()) {
+					if (bp.FileName == a.TextFile.Name) {
+						if (bp.Line > a.LineNumber) {
+							// If the line that has the breakpoint is deleted, delete the breakpoint, otherwise update the line #.
+							if (bp.Line + a.LineCount >= a.LineNumber)
+								breakpoints.UpdateBreakpointLine (bp, bp.Line + a.LineCount);
+							else
+								breakpoints.Remove (bp);
+						} else if (bp.Line == a.LineNumber && a.LineCount < 0)
 							breakpoints.Remove (bp);
 					}
-					else if (bp.Line == a.LineNumber && a.LineCount < 0)
-						breakpoints.Remove (bp);
 				}
 			}
 		}
 		
 		static void OnStoreUserPrefs (object s, UserPreferencesEventArgs args)
 		{
-			args.Properties.SetValue ("MonoDevelop.Ide.DebuggingService.Breakpoints", breakpoints.Save ());
+			lock (breakpoints)
+				args.Properties.SetValue ("MonoDevelop.Ide.DebuggingService.Breakpoints", breakpoints.Save ());
 			args.Properties.SetValue ("MonoDevelop.Ide.DebuggingService.PinnedWatches", pinnedWatches);
 		}
 		
@@ -902,17 +915,24 @@ namespace MonoDevelop.Debugger
 			XmlElement elem = args.Properties.GetValue<XmlElement> ("MonoDevelop.Ide.DebuggingService.Breakpoints");
 			if (elem == null)
 				elem = args.Properties.GetValue<XmlElement> ("MonoDevelop.Ide.DebuggingService");
-			if (elem != null)
-				breakpoints.Load (elem);
+
+			if (elem != null) {
+				lock (breakpoints)
+					breakpoints.Load (elem);
+			}
+
 			PinnedWatchStore wstore = args.Properties.GetValue<PinnedWatchStore> ("MonoDevelop.Ide.DebuggingService.PinnedWatches");
 			if (wstore != null)
 				pinnedWatches.LoadFrom (wstore);
-			pinnedWatches.BindAll (breakpoints);
+
+			lock (breakpoints)
+				pinnedWatches.BindAll (breakpoints);
 		}
 		
 		static void OnSolutionClosed (object s, EventArgs args)
 		{
-			breakpoints.Clear ();
+			lock (breakpoints)
+				breakpoints.Clear ();
 		}
 		
 		static string ResolveType (string identifier, SourceLocation location)

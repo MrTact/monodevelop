@@ -57,6 +57,9 @@ namespace MonoDevelop.Projects
 		
 		[ItemProperty ("Policies", IsExternal = true, SkipEmpty = true)]
 		MonoDevelop.Projects.Policies.PolicyBag policies;
+
+		[ItemProperty ("UseMSBuildEngine")]
+		public bool? UseMSBuildEngine { get; set; }
 		
 		PropertyBag userProperties;
 		
@@ -529,7 +532,7 @@ namespace MonoDevelop.Projects
 		/// <param name='monitor'>
 		/// A progress monitor
 		/// </param>
-		/// <param name='configuration'>
+		/// <param name='solutionConfiguration'>
 		/// Configuration to use to build the project
 		/// </param>
 		/// <param name='buildReferences'>
@@ -691,7 +694,14 @@ namespace MonoDevelop.Projects
 		{
 			return true;
 		}
-		
+
+		internal bool InternalCheckNeedsBuild (ConfigurationSelector configuration)
+		{
+			using (Counters.NeedsBuildingTimer.BeginTiming ("NeedsBuilding check for " + Name)) {
+				return Services.ProjectService.GetExtensionChain (this).GetNeedsBuilding (this, configuration);
+			}
+		}
+
 		/// <summary>
 		/// States whether this solution item needs to be built or not
 		/// </summary>
@@ -890,6 +900,8 @@ namespace MonoDevelop.Projects
 		/// </param>
 		protected void NotifyModified (string hint)
 		{
+			if (!Loading)
+				ItemHandler.OnModified (hint);
 			OnModified (new SolutionItemModifiedEventArgs (this, hint));
 		}
 		

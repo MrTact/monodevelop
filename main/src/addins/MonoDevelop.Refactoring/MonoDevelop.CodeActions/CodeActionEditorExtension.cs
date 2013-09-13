@@ -93,12 +93,13 @@ namespace MonoDevelop.CodeActions
 			document.DocumentParsed -= HandleDocumentDocumentParsed;
 			document.Editor.Parent.BeginHover -= HandleBeginHover;
 			RemoveWidget ();
+			Fixes = null;
 			base.Dispose ();
 		}
-		TextLocation loc;
+		//TextLocation loc;
 		void CreateWidget (IEnumerable<CodeAction> fixes, TextLocation loc)
 		{
-			this.loc = loc;
+			//this.loc = loc;
 			var editor = document.Editor;
 			var container = editor.Parent;
 			var point = editor.Parent.LocationToPoint (loc);
@@ -201,9 +202,9 @@ namespace MonoDevelop.CodeActions
 				cr.Rectangle (Math.Floor (x) + 0.5, Math.Floor (y) + 0.5 + (line == editor.GetLineByOffset (startOffset) ? editor.LineHeight - tagMarkerHeight - 1 : 0), tagMarkerWidth * cr.LineWidth, tagMarkerHeight * cr.LineWidth);
 
 				if (HslColor.Brightness (editor.ColorStyle.PlainText.Background) < 0.5) {
-					cr.Color = new Cairo.Color (0.8, 0.8, 1, 0.9);
+					cr.SetSourceRGBA (0.8, 0.8, 1, 0.9);
 				} else {
-					cr.Color = new Cairo.Color (0.2, 0.2, 1, 0.9);
+					cr.SetSourceRGBA (0.2, 0.2, 1, 0.9);
 				}
 				cr.Stroke ();
 			}
@@ -220,6 +221,8 @@ namespace MonoDevelop.CodeActions
 				if (args.Button != 0)
 					return;
 				var line = editor.GetLine (loc.Line);
+				if (line == null)
+					return;
 				var x = editor.ColumnToX (line, loc.Column) - editor.HAdjustment.Value + editor.TextViewMargin.TextStartPosition;
 				var y = editor.LineToY (line.LineNumber + 1) - editor.VAdjustment.Value;
 				if (args.X - x >= 0 * editor.Options.Zoom && 
